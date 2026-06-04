@@ -109,7 +109,7 @@ impl PlannerBackend for ToyPlanner {
             TOY_BONUS_SLOT,
             BufferData::U32(vec![state.bonus]),
         ));
-        Ok(plan.build())
+        plan.build_checked()
     }
 
     fn encode_batch(

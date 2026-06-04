@@ -285,7 +285,7 @@ impl PlannerBackend for BenchPlanner {
                 KernelSpec::new(STAGE_FINISH_KIND, finish_payload)
                     .with_bindings([BufferBinding::read_write(DATA_SLOT)]),
             ));
-        Ok(plan.build())
+        plan.build_checked()
     }
 
     fn encode_batch(

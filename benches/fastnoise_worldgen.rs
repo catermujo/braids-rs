@@ -1390,14 +1390,16 @@ impl PlannerBackend for NullPlanner {
         _state: &Self::State,
         _scratch: &mut PlannerScratch,
     ) -> BraidResult<CompiledPlan<Self::PlannerMeta>> {
-        Ok(CompiledPlan {
+        let plan = CompiledPlan {
             pipeline: PipelineShape {
                 buffers: Vec::new(),
                 stages: Vec::new(),
             },
             static_buffers: Vec::new(),
             planner_meta: (),
-        })
+        };
+        plan.validate()?;
+        Ok(plan)
     }
 
     fn encode_batch(

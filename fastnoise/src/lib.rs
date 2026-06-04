@@ -341,7 +341,7 @@ impl KernelPayload for WarpPayload {
             _ => {
                 return Err(BraidError::InvalidSpec(
                     "warp payload received wrong kernel kind".to_owned(),
-                ))
+                ));
             }
         };
         Ok(Self {
@@ -404,7 +404,7 @@ impl KernelPayload for SamplePayload {
             _ => {
                 return Err(BraidError::InvalidSpec(
                     "sample payload received wrong kernel kind".to_owned(),
-                ))
+                ));
             }
         };
         Ok(Self {
@@ -773,19 +773,18 @@ impl CpuKernel for GridInitKernel {
                 let [xs, ys, zs]: [&mut [f32]; 3] = buffers
                     .try_into()
                     .map_err(|_| BraidError::from("init grid3d buffer view mismatch"))?;
-                for (query_index, offset_value) in offsets.iter().take(query_count).copied().enumerate()
+                for (query_index, offset_value) in
+                    offsets.iter().take(query_count).copied().enumerate()
                 {
                     let meta_base = query_index * 3;
                     let float_base = query_index * 6;
-                    let width = usize::try_from(meta[meta_base]).map_err(|_| {
-                        BraidError::InvalidSpec("grid3d width overflow".to_owned())
-                    })?;
+                    let width = usize::try_from(meta[meta_base])
+                        .map_err(|_| BraidError::InvalidSpec("grid3d width overflow".to_owned()))?;
                     let height = usize::try_from(meta[meta_base + 1]).map_err(|_| {
                         BraidError::InvalidSpec("grid3d height overflow".to_owned())
                     })?;
-                    let depth = usize::try_from(meta[meta_base + 2]).map_err(|_| {
-                        BraidError::InvalidSpec("grid3d depth overflow".to_owned())
-                    })?;
+                    let depth = usize::try_from(meta[meta_base + 2])
+                        .map_err(|_| BraidError::InvalidSpec("grid3d depth overflow".to_owned()))?;
                     let offset = usize::try_from(offset_value).map_err(|_| {
                         BraidError::InvalidSpec("grid3d offset overflow".to_owned())
                     })?;
@@ -1317,7 +1316,7 @@ fn compile_graph(
     for stage in stages {
         plan.stage(stage);
     }
-    Ok(plan.build())
+    plan.build_checked()
 }
 
 fn validate_node_id(id: &str) -> BraidResult<()> {

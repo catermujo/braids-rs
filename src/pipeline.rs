@@ -1,3 +1,6 @@
+use crate::error::{BraidError, BraidResult};
+use crate::job::JobPacket;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -126,6 +129,30 @@ impl BufferSpec {
 
     pub const fn dynamic(slot: BufferSlot, element_kind: ElementKind) -> Self {
         Self::new(slot, element_kind, BufferLayout::Dynamic)
+    }
+
+    fn validate_len(&self, query_count: usize, len: usize) -> BraidResult<()> {
+        let expected_len = match self.layout {
+            BufferLayout::PerQueryScalar => Some(query_count),
+            BufferLayout::PerQueryVector { width } => query_count.checked_mul(width),
+            BufferLayout::Dynamic => return Ok(()),
+        };
+
+        let Some(expected_len) = expected_len else {
+            return Err(BraidError::InvalidSpec(format!(
+                "buffer slot {} length overflow for declared layout",
+                self.slot
+            )));
+        };
+
+        if len != expected_len {
+            return Err(BraidError::InvalidSpec(format!(
+                "buffer slot {} has length {} but declared layout expects {}",
+                self.slot, len, expected_len
+            )));
+        }
+
+        Ok(())
     }
 }
 
@@ -263,6 +290,83 @@ impl<M> CompiledPlan<M> {
     pub fn builder(planner_meta: M) -> PlanBuilder<M> {
         PlanBuilder::new(planner_meta)
     }
+
+    pub fn validate(&self) -> BraidResult<()> {
+        let specs = self.specs_by_slot()?;
+        let mut static_slots = HashMap::with_capacity(self.static_buffers.len());
+        for buffer in &self.static_buffers {
+            if static_slots.insert(buffer.slot, ()).is_some() {
+                return Err(BraidError::InvalidSpec(format!(
+                    "duplicate static buffer slot {}",
+                    buffer.slot
+                )));
+            }
+            let Some(spec) = specs.get(&buffer.slot) else {
+                return Err(BraidError::InvalidSpec(format!(
+                    "static buffer slot {} is not declared in pipeline",
+                    buffer.slot
+                )));
+            };
+            if spec.element_kind != buffer.data.kind() {
+                return Err(BraidError::InvalidSpec(format!(
+                    "static buffer slot {} has wrong element kind",
+                    buffer.slot
+                )));
+            }
+        }
+
+        for (stage_index, stage) in self.pipeline.stages.iter().enumerate() {
+            for (kernel_index, kernel) in stage.kernels.iter().enumerate() {
+                for binding in &kernel.bindings {
+                    if !specs.contains_key(&binding.slot) {
+                        return Err(BraidError::InvalidSpec(format!(
+                            "stage {} kernel {} references undeclared buffer slot {}",
+                            stage_index, kernel_index, binding.slot
+                        )));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn validate_packet(&self, packet: &JobPacket) -> BraidResult<()> {
+        let specs = self.specs_by_slot()?;
+        for (slot, kind, len) in packet.buffer_descriptors() {
+            let Some(spec) = specs.get(&slot) else {
+                if len == 0 {
+                    continue;
+                }
+                return Err(BraidError::InvalidSpec(format!(
+                    "packet contains undeclared buffer slot {}",
+                    slot
+                )));
+            };
+            if spec.element_kind != kind {
+                return Err(BraidError::InvalidBufferType {
+                    slot,
+                    expected: spec.element_kind,
+                });
+            }
+            spec.validate_len(packet.query_count(), len)?;
+        }
+
+        Ok(())
+    }
+
+    fn specs_by_slot(&self) -> BraidResult<HashMap<BufferSlot, &BufferSpec>> {
+        let mut specs = HashMap::with_capacity(self.pipeline.buffers.len());
+        for spec in &self.pipeline.buffers {
+            if specs.insert(spec.slot, spec).is_some() {
+                return Err(BraidError::InvalidSpec(format!(
+                    "duplicate buffer slot {} in pipeline",
+                    spec.slot
+                )));
+            }
+        }
+        Ok(specs)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -302,5 +406,11 @@ impl<M> PlanBuilder<M> {
             static_buffers: self.static_buffers,
             planner_meta: self.planner_meta,
         }
+    }
+
+    pub fn build_checked(self) -> BraidResult<CompiledPlan<M>> {
+        let plan = self.build();
+        plan.validate()?;
+        Ok(plan)
     }
 }
