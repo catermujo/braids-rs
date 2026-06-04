@@ -133,7 +133,7 @@ mod tests {
                 buffers: Vec::new(),
                 stages: vec![StageSpec {
                     kernels: vec![KernelSpec {
-                        kind_id: KernelKind::new(999),
+                        kind_id: KernelKind(999),
                         payload: Arc::from([]),
                         bindings: Vec::new(),
                         dispatch: crate::pipeline::DispatchHint::Serial,
@@ -149,7 +149,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             err,
-            BraidError::BackendRejectedKernel(kind) if kind == KernelKind::new(999)
+            BraidError::BackendRejectedKernel(kind) if kind == KernelKind(999)
         ));
     }
 }

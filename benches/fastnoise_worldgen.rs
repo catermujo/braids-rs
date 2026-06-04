@@ -13,7 +13,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const NULL_QUERY_SLOT: BufferSlot = BufferSlot::new(0);
+const NULL_QUERY_SLOT: BufferSlot = BufferSlot(0);
 
 fn main() -> BraidResult<()> {
     let config = BenchConfig::from_args();
@@ -463,7 +463,7 @@ fn bench_terrain_encode_only_serial(config: &BenchConfig) -> BraidResult<BenchRe
             &mut packet,
             &mut batch_scratch,
         )?;
-        checksum = checksum.wrapping_add(packet.query_count() as u64);
+        checksum = checksum.wrapping_add(packet.query_count as u64);
         black_box(&packet);
         frame_times.push(frame_start.elapsed());
     }
@@ -506,7 +506,7 @@ fn bench_terrain_compute_only_serial(config: &BenchConfig) -> BraidResult<BenchR
         for (stage_index, stage) in plan.pipeline.stages.iter().enumerate() {
             backend.run_stage(&prepared, stage_index, stage, &mut packet, &cancel)?;
         }
-        checksum = checksum.wrapping_add(packet.query_count() as u64);
+        checksum = checksum.wrapping_add(packet.query_count as u64);
         black_box(&packet);
         frame_times.push(frame_start.elapsed());
     }
@@ -1419,8 +1419,8 @@ impl PlannerBackend for NullPlanner {
         packet: &mut JobPacket,
         _scratch: &mut BatchScratch,
     ) -> BraidResult<()> {
-        packet.set_query_count(queries.len());
-        let values = packet.ensure_u32(NULL_QUERY_SLOT, queries.len());
+        packet.query_count = queries.len();
+        let values = packet.ensure::<u32>(NULL_QUERY_SLOT, queries.len());
         values.copy_from_slice(queries);
         Ok(())
     }
@@ -1430,7 +1430,7 @@ impl PlannerBackend for NullPlanner {
         _plan: &CompiledPlan<Self::PlannerMeta>,
         packet: &JobPacket,
     ) -> BraidResult<Vec<Self::Resolution>> {
-        Ok(packet.u32(NULL_QUERY_SLOT)?.to_vec())
+        Ok(packet.slice::<u32>(NULL_QUERY_SLOT)?.to_vec())
     }
 }
 

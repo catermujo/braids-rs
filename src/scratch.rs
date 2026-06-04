@@ -26,8 +26,6 @@ impl PlannerScratch {
 #[derive(Debug, Default)]
 /// Per-dispatch batch scratch reused during query encoding.
 pub struct BatchScratch {
-    /// Planner-specific float scratch commonly used for normalized facts/inputs.
-    pub fact_values: Vec<f32>,
     /// `u32` scratch storage.
     pub u32s: Vec<u32>,
     /// `u64` scratch storage.
@@ -39,7 +37,6 @@ pub struct BatchScratch {
 impl BatchScratch {
     /// Clear logical contents while keeping capacity.
     pub fn reset(&mut self) {
-        self.fact_values.clear();
         self.u32s.clear();
         self.u64s.clear();
         self.f32s.clear();

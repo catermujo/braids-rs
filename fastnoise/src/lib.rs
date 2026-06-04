@@ -38,46 +38,36 @@ enum FastNoiseKernel {
 impl FastNoiseKernel {
     const fn kind(self) -> KernelKind {
         match self {
-            Self::InitGrid2d => KernelKind::new(0xF001),
-            Self::InitGrid3d => KernelKind::new(0xF002),
-            Self::Warp2d => KernelKind::new(0xF100),
-            Self::Warp3d => KernelKind::new(0xF101),
-            Self::Sample2d => KernelKind::new(0xF200),
-            Self::Sample3d => KernelKind::new(0xF201),
-            Self::Combine => KernelKind::new(0xF300),
+            Self::InitGrid2d => KernelKind(0xF001),
+            Self::InitGrid3d => KernelKind(0xF002),
+            Self::Warp2d => KernelKind(0xF100),
+            Self::Warp3d => KernelKind(0xF101),
+            Self::Sample2d => KernelKind(0xF200),
+            Self::Sample3d => KernelKind(0xF201),
+            Self::Combine => KernelKind(0xF300),
+        }
+    }
+
+    fn from_kind(value: KernelKind) -> Option<Self> {
+        match value.0 {
+            0xF001 => Some(Self::InitGrid2d),
+            0xF002 => Some(Self::InitGrid3d),
+            0xF100 => Some(Self::Warp2d),
+            0xF101 => Some(Self::Warp3d),
+            0xF200 => Some(Self::Sample2d),
+            0xF201 => Some(Self::Sample3d),
+            0xF300 => Some(Self::Combine),
+            _ => None,
         }
     }
 }
 
-impl From<FastNoiseKernel> for KernelKind {
-    fn from(value: FastNoiseKernel) -> Self {
-        value.kind()
-    }
-}
-
-impl TryFrom<KernelKind> for FastNoiseKernel {
-    type Error = ();
-
-    fn try_from(value: KernelKind) -> Result<Self, Self::Error> {
-        match value.raw() {
-            0xF001 => Ok(Self::InitGrid2d),
-            0xF002 => Ok(Self::InitGrid3d),
-            0xF100 => Ok(Self::Warp2d),
-            0xF101 => Ok(Self::Warp3d),
-            0xF200 => Ok(Self::Sample2d),
-            0xF201 => Ok(Self::Sample3d),
-            0xF300 => Ok(Self::Combine),
-            _ => Err(()),
-        }
-    }
-}
-
-const SLOT_QUERY_META: BufferSlot = BufferSlot::new(0);
-const SLOT_QUERY_F32: BufferSlot = BufferSlot::new(1);
-const SLOT_QUERY_OFFSETS: BufferSlot = BufferSlot::new(2);
-const SLOT_BASE_X: BufferSlot = BufferSlot::new(10);
-const SLOT_BASE_Y: BufferSlot = BufferSlot::new(11);
-const SLOT_BASE_Z: BufferSlot = BufferSlot::new(12);
+const SLOT_QUERY_META: BufferSlot = BufferSlot(0);
+const SLOT_QUERY_F32: BufferSlot = BufferSlot(1);
+const SLOT_QUERY_OFFSETS: BufferSlot = BufferSlot(2);
+const SLOT_BASE_X: BufferSlot = BufferSlot(10);
+const SLOT_BASE_Y: BufferSlot = BufferSlot(11);
+const SLOT_BASE_Z: BufferSlot = BufferSlot(12);
 const SLOT_DYNAMIC_START: u16 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,7 +272,7 @@ pub fn make_cpu_backend() -> FastNoiseCpuBackend {
         FastNoiseKernel::Sample3d,
         FastNoiseKernel::Combine,
     ] {
-        backend.register_factory(kind.into(), Arc::clone(&factory));
+        backend.register_factory(kind.kind(), Arc::clone(&factory));
     }
     backend
 }
@@ -290,8 +280,8 @@ pub fn make_cpu_backend() -> FastNoiseCpuBackend {
 #[derive(Clone, Debug)]
 /// Planner metadata preserved inside compiled FastNoise plans.
 pub struct FastNoisePlannerMeta {
-    dimension: GraphDimension,
-    final_slot: BufferSlot,
+    pub dimension: GraphDimension,
+    pub final_slot: BufferSlot,
 }
 
 /// Mutable planner state for the FastNoise graph.
@@ -375,7 +365,12 @@ trait KernelPayload: Sized {
         scratch.reset();
         let mut writer = PayloadWriter::new(&mut scratch.bytes);
         self.encode_into(&mut writer)?;
-        Ok(KernelSpec::new(self.kind().into(), scratch.bytes.clone()))
+        Ok(KernelSpec {
+            kind_id: self.kind().kind(),
+            payload: scratch.bytes.clone().into(),
+            bindings: Vec::new(),
+            dispatch: braid::DispatchHint::WholeBatch,
+        })
     }
 
     fn decode(kind: FastNoiseKernel, bytes: &[u8]) -> BraidResult<Self> {
@@ -626,7 +621,7 @@ impl PlannerBackend for FastNoisePlanner {
         scratch: &mut BatchScratch,
     ) -> BraidResult<()> {
         scratch.reset();
-        packet.set_query_count(queries.len());
+        packet.query_count = queries.len();
 
         let mut meta_values = vec![0u32; queries.len() * 3];
         let mut float_values = vec![0.0f32; queries.len() * 6];
@@ -702,13 +697,13 @@ impl PlannerBackend for FastNoisePlanner {
         }
 
         packet
-            .ensure_u32(SLOT_QUERY_META, meta_values.len())
+            .ensure::<u32>(SLOT_QUERY_META, meta_values.len())
             .copy_from_slice(meta_values.as_slice());
         packet
-            .ensure_f32(SLOT_QUERY_F32, float_values.len())
+            .ensure::<f32>(SLOT_QUERY_F32, float_values.len())
             .copy_from_slice(float_values.as_slice());
         packet
-            .ensure_u32(SLOT_QUERY_OFFSETS, offset_values.len())
+            .ensure::<u32>(SLOT_QUERY_OFFSETS, offset_values.len())
             .copy_from_slice(offset_values.as_slice());
 
         Ok(())
@@ -719,8 +714,8 @@ impl PlannerBackend for FastNoisePlanner {
         plan: &CompiledPlan<Self::PlannerMeta>,
         packet: &JobPacket,
     ) -> BraidResult<Vec<Self::Resolution>> {
-        let values = packet.f32(plan.planner_meta.final_slot)?;
-        let offsets = packet.u32(SLOT_QUERY_OFFSETS)?;
+        let values = packet.slice::<f32>(plan.planner_meta.final_slot)?;
+        let offsets = packet.slice::<u32>(SLOT_QUERY_OFFSETS)?;
         let mut summaries = Vec::with_capacity(offsets.len().saturating_sub(1));
         for window in offsets.windows(2) {
             let start = usize::try_from(window[0])
@@ -832,8 +827,8 @@ impl CpuKernelFactory for FastNoiseKernelFactory {
         kernel: &KernelSpec,
         _scratch: &mut ComputeScratch,
     ) -> BraidResult<Box<dyn CpuKernel>> {
-        let kind = FastNoiseKernel::try_from(kernel.kind_id)
-            .map_err(|_| BraidError::BackendRejectedKernel(kernel.kind_id))?;
+        let kind = FastNoiseKernel::from_kind(kernel.kind_id)
+            .ok_or(BraidError::BackendRejectedKernel(kernel.kind_id))?;
         match kind {
             FastNoiseKernel::InitGrid2d => Ok(Box::new(GridInitKernel {
                 dimension: GraphDimension::D2,
@@ -862,61 +857,62 @@ impl CpuKernelFactory for FastNoiseKernelFactory {
 
 impl CpuKernel for GridInitKernel {
     fn run(&self, packet: &mut JobPacket, cancel: &CancelFlag) -> BraidResult<()> {
-        let meta = packet.u32(SLOT_QUERY_META)?.to_vec();
-        let floats = packet.f32(SLOT_QUERY_F32)?.to_vec();
-        let offsets = packet.u32(SLOT_QUERY_OFFSETS)?.to_vec();
+        let meta = packet.slice::<u32>(SLOT_QUERY_META)?.to_vec();
+        let floats = packet.slice::<f32>(SLOT_QUERY_F32)?.to_vec();
+        let offsets = packet.slice::<u32>(SLOT_QUERY_OFFSETS)?.to_vec();
         let total = total_samples_from_offsets(offsets.as_slice())?;
-        let query_count = packet.query_count();
-        packet.ensure_f32(SLOT_BASE_X, total);
-        packet.ensure_f32(SLOT_BASE_Y, total);
+        let query_count = packet.query_count;
+        packet.ensure::<f32>(SLOT_BASE_X, total);
+        packet.ensure::<f32>(SLOT_BASE_Y, total);
         if self.dimension == GraphDimension::D3 {
-            packet.ensure_f32(SLOT_BASE_Z, total);
-            return packet.with_f32_buffers(&[SLOT_BASE_X, SLOT_BASE_Y, SLOT_BASE_Z], |buffers| {
-                let [xs, ys, zs]: [&mut [f32]; 3] = buffers
-                    .try_into()
-                    .map_err(|_| BraidError::from("init grid3d buffer view mismatch"))?;
-                for (query_index, offset_value) in
-                    offsets.iter().take(query_count).copied().enumerate()
-                {
-                    let meta_base = query_index * 3;
-                    let float_base = query_index * 6;
-                    let width = usize::try_from(meta[meta_base])
-                        .map_err(|_| BraidError::InvalidSpec("grid3d width overflow".to_owned()))?;
-                    let height = usize::try_from(meta[meta_base + 1]).map_err(|_| {
-                        BraidError::InvalidSpec("grid3d height overflow".to_owned())
-                    })?;
-                    let depth = usize::try_from(meta[meta_base + 2])
-                        .map_err(|_| BraidError::InvalidSpec("grid3d depth overflow".to_owned()))?;
-                    let offset = usize::try_from(offset_value).map_err(|_| {
-                        BraidError::InvalidSpec("grid3d offset overflow".to_owned())
-                    })?;
-                    let origin_x = floats[float_base];
-                    let origin_y = floats[float_base + 1];
-                    let origin_z = floats[float_base + 2];
-                    let step_x = floats[float_base + 3];
-                    let step_y = floats[float_base + 4];
-                    let step_z = floats[float_base + 5];
-                    for z in 0..depth {
-                        for y in 0..height {
-                            for x in 0..width {
-                                let index = offset + ((z * height + y) * width) + x;
-                                xs[index] = origin_x + (x as f32 * step_x);
-                                ys[index] = origin_y + (y as f32 * step_y);
-                                zs[index] = origin_z + (z as f32 * step_z);
-                            }
-                            if y & 15 == 0 && cancel.is_cancelled() {
-                                return Err(BraidError::Cancelled);
+            packet.ensure::<f32>(SLOT_BASE_Z, total);
+            return packet.with_slices::<f32, _, _>(
+                [SLOT_BASE_X, SLOT_BASE_Y, SLOT_BASE_Z],
+                |buffers| {
+                    let [xs, ys, zs] = buffers;
+                    for (query_index, offset_value) in
+                        offsets.iter().take(query_count).copied().enumerate()
+                    {
+                        let meta_base = query_index * 3;
+                        let float_base = query_index * 6;
+                        let width = usize::try_from(meta[meta_base]).map_err(|_| {
+                            BraidError::InvalidSpec("grid3d width overflow".to_owned())
+                        })?;
+                        let height = usize::try_from(meta[meta_base + 1]).map_err(|_| {
+                            BraidError::InvalidSpec("grid3d height overflow".to_owned())
+                        })?;
+                        let depth = usize::try_from(meta[meta_base + 2]).map_err(|_| {
+                            BraidError::InvalidSpec("grid3d depth overflow".to_owned())
+                        })?;
+                        let offset = usize::try_from(offset_value).map_err(|_| {
+                            BraidError::InvalidSpec("grid3d offset overflow".to_owned())
+                        })?;
+                        let origin_x = floats[float_base];
+                        let origin_y = floats[float_base + 1];
+                        let origin_z = floats[float_base + 2];
+                        let step_x = floats[float_base + 3];
+                        let step_y = floats[float_base + 4];
+                        let step_z = floats[float_base + 5];
+                        for z in 0..depth {
+                            for y in 0..height {
+                                for x in 0..width {
+                                    let index = offset + ((z * height + y) * width) + x;
+                                    xs[index] = origin_x + (x as f32 * step_x);
+                                    ys[index] = origin_y + (y as f32 * step_y);
+                                    zs[index] = origin_z + (z as f32 * step_z);
+                                }
+                                if y & 15 == 0 && cancel.is_cancelled() {
+                                    return Err(BraidError::Cancelled);
+                                }
                             }
                         }
                     }
-                }
-                Ok(())
-            });
+                    Ok(())
+                },
+            );
         }
-        packet.with_f32_buffers(&[SLOT_BASE_X, SLOT_BASE_Y], |buffers| {
-            let [xs, ys]: [&mut [f32]; 2] = buffers
-                .try_into()
-                .map_err(|_| BraidError::from("init grid2d buffer view mismatch"))?;
+        packet.with_slices::<f32, _, _>([SLOT_BASE_X, SLOT_BASE_Y], |buffers| {
+            let [xs, ys] = buffers;
             for (query_index, offset_value) in offsets.iter().take(query_count).copied().enumerate()
             {
                 let meta_base = query_index * 3;
@@ -949,15 +945,15 @@ impl CpuKernel for GridInitKernel {
 
 impl CpuKernel for WarpKernel {
     fn run(&self, packet: &mut JobPacket, cancel: &CancelFlag) -> BraidResult<()> {
-        let total = total_samples_from_offsets(packet.u32(SLOT_QUERY_OFFSETS)?)?;
-        packet.ensure_f32(self.output.x, total);
-        packet.ensure_f32(self.output.y, total);
+        let total = total_samples_from_offsets(packet.slice::<u32>(SLOT_QUERY_OFFSETS)?)?;
+        packet.ensure::<f32>(self.output.x, total);
+        packet.ensure::<f32>(self.output.y, total);
         if self.dimension == GraphDimension::D3 {
             let source_z = expect_slot(self.source.z, "warp source z")?;
             let output_z = expect_slot(self.output.z, "warp output z")?;
-            packet.ensure_f32(output_z, total);
-            return packet.with_f32_buffers(
-                &[
+            packet.ensure::<f32>(output_z, total);
+            return packet.with_slices::<f32, _, _>(
+                [
                     self.source.x,
                     self.source.y,
                     source_z,
@@ -966,9 +962,7 @@ impl CpuKernel for WarpKernel {
                     output_z,
                 ],
                 |buffers| {
-                    let [xs, ys, zs, out_xs, out_ys, out_zs]: [&mut [f32]; 6] = buffers
-                        .try_into()
-                        .map_err(|_| BraidError::from("warp3d buffer view mismatch"))?;
+                    let [xs, ys, zs, out_xs, out_ys, out_zs] = buffers;
                     for index in 0..out_xs.len() {
                         let (warp_x, warp_y, warp_z) =
                             self.noise.domain_warp_3d(xs[index], ys[index], zs[index]);
@@ -983,12 +977,10 @@ impl CpuKernel for WarpKernel {
                 },
             );
         }
-        packet.with_f32_buffers(
-            &[self.source.x, self.source.y, self.output.x, self.output.y],
+        packet.with_slices::<f32, _, _>(
+            [self.source.x, self.source.y, self.output.x, self.output.y],
             |buffers| {
-                let [xs, ys, out_xs, out_ys]: [&mut [f32]; 4] = buffers
-                    .try_into()
-                    .map_err(|_| BraidError::from("warp2d buffer view mismatch"))?;
+                let [xs, ys, out_xs, out_ys] = buffers;
                 for index in 0..out_xs.len() {
                     let (warp_x, warp_y) = self.noise.domain_warp_2d(xs[index], ys[index]);
                     out_xs[index] = warp_x;
@@ -1005,16 +997,14 @@ impl CpuKernel for WarpKernel {
 
 impl CpuKernel for SampleKernel {
     fn run(&self, packet: &mut JobPacket, cancel: &CancelFlag) -> BraidResult<()> {
-        let total = total_samples_from_offsets(packet.u32(SLOT_QUERY_OFFSETS)?)?;
-        packet.ensure_f32(self.output, total);
+        let total = total_samples_from_offsets(packet.slice::<u32>(SLOT_QUERY_OFFSETS)?)?;
+        packet.ensure::<f32>(self.output, total);
         if self.dimension == GraphDimension::D3 {
             let source_z = expect_slot(self.source.z, "sample source z")?;
-            return packet.with_f32_buffers(
-                &[self.source.x, self.source.y, source_z, self.output],
+            return packet.with_slices::<f32, _, _>(
+                [self.source.x, self.source.y, source_z, self.output],
                 |buffers| {
-                    let [xs, ys, zs, out]: [&mut [f32]; 4] = buffers
-                        .try_into()
-                        .map_err(|_| BraidError::from("sample3d buffer view mismatch"))?;
+                    let [xs, ys, zs, out] = buffers;
                     for index in 0..out.len() {
                         out[index] = self.noise.get_noise_3d(xs[index], ys[index], zs[index]);
                         if index & 2047 == 0 && cancel.is_cancelled() {
@@ -1025,10 +1015,8 @@ impl CpuKernel for SampleKernel {
                 },
             );
         }
-        packet.with_f32_buffers(&[self.source.x, self.source.y, self.output], |buffers| {
-            let [xs, ys, out]: [&mut [f32]; 3] = buffers
-                .try_into()
-                .map_err(|_| BraidError::from("sample2d buffer view mismatch"))?;
+        packet.with_slices::<f32, _, _>([self.source.x, self.source.y, self.output], |buffers| {
+            let [xs, ys, out] = buffers;
             for index in 0..out.len() {
                 out[index] = self.noise.get_noise_2d(xs[index], ys[index]);
                 if index & 4095 == 0 && cancel.is_cancelled() {
@@ -1042,8 +1030,8 @@ impl CpuKernel for SampleKernel {
 
 impl CpuKernel for CombineKernel {
     fn run(&self, packet: &mut JobPacket, cancel: &CancelFlag) -> BraidResult<()> {
-        let total = total_samples_from_offsets(packet.u32(SLOT_QUERY_OFFSETS)?)?;
-        packet.ensure_f32(self.output, total);
+        let total = total_samples_from_offsets(packet.slice::<u32>(SLOT_QUERY_OFFSETS)?)?;
+        packet.ensure::<f32>(self.output, total);
         match self.op {
             CombineOp::Add => self.run_binary(packet, cancel, |a, b| a + b),
             CombineOp::Sub => self.run_binary(packet, cancel, |a, b| a - b),
@@ -1053,10 +1041,8 @@ impl CpuKernel for CombineKernel {
             CombineOp::Clamp => {
                 let [min_value, max_value] = expect_params(self.params.as_slice(), 2, "clamp")?;
                 let input = expect_input(self.inputs.as_slice(), 1, "clamp")?;
-                packet.with_f32_buffers(&[input, self.output], |buffers| {
-                    let [values, out]: [&mut [f32]; 2] = buffers
-                        .try_into()
-                        .map_err(|_| BraidError::from("clamp buffer view mismatch"))?;
+                packet.with_slices::<f32, _, _>([input, self.output], |buffers| {
+                    let [values, out] = buffers;
                     for index in 0..out.len() {
                         out[index] = values[index].clamp(min_value, max_value);
                         if index & 4095 == 0 && cancel.is_cancelled() {
@@ -1070,10 +1056,8 @@ impl CpuKernel for CombineKernel {
                 let [src_min, src_max, dst_min, dst_max] =
                     expect_params(self.params.as_slice(), 4, "remap")?;
                 let input = expect_input(self.inputs.as_slice(), 1, "remap")?;
-                packet.with_f32_buffers(&[input, self.output], |buffers| {
-                    let [values, out]: [&mut [f32]; 2] = buffers
-                        .try_into()
-                        .map_err(|_| BraidError::from("remap buffer view mismatch"))?;
+                packet.with_slices::<f32, _, _>([input, self.output], |buffers| {
+                    let [values, out] = buffers;
                     for index in 0..out.len() {
                         let denom = src_max - src_min;
                         let t = if denom.abs() <= f32::EPSILON {
@@ -1093,10 +1077,8 @@ impl CpuKernel for CombineKernel {
                 let [y_min, y_max, out_min, out_max] =
                     expect_params(self.params.as_slice(), 4, "ygradient")?;
                 let input = expect_input(self.inputs.as_slice(), 1, "ygradient")?;
-                packet.with_f32_buffers(&[input, SLOT_BASE_Y, self.output], |buffers| {
-                    let [values, ys, out]: [&mut [f32]; 3] = buffers
-                        .try_into()
-                        .map_err(|_| BraidError::from("ygradient buffer view mismatch"))?;
+                packet.with_slices::<f32, _, _>([input, SLOT_BASE_Y, self.output], |buffers| {
+                    let [values, ys, out] = buffers;
                     for index in 0..out.len() {
                         let denom = y_max - y_min;
                         let t = if denom.abs() <= f32::EPSILON {
@@ -1125,10 +1107,8 @@ impl CombineKernel {
         op: impl Fn(f32, f32) -> f32,
     ) -> BraidResult<()> {
         let [left, right] = expect_two_inputs(self.inputs.as_slice(), "binary combine")?;
-        packet.with_f32_buffers(&[left, right, self.output], |buffers| {
-            let [lhs, rhs, out]: [&mut [f32]; 3] = buffers
-                .try_into()
-                .map_err(|_| BraidError::from("binary combine buffer view mismatch"))?;
+        packet.with_slices::<f32, _, _>([left, right, self.output], |buffers| {
+            let [lhs, rhs, out] = buffers;
             for index in 0..out.len() {
                 out[index] = op(lhs[index], rhs[index]);
                 if index & 4095 == 0 && cancel.is_cancelled() {
@@ -1257,14 +1237,38 @@ fn compile_graph(
     let mut position_slots = vec![None; graph.len()];
     let mut scalar_slots = vec![None; graph.len()];
     let mut buffers = vec![
-        BufferSpec::dynamic(SLOT_QUERY_META, ElementKind::U32),
-        BufferSpec::dynamic(SLOT_QUERY_F32, ElementKind::F32),
-        BufferSpec::dynamic(SLOT_QUERY_OFFSETS, ElementKind::U32),
-        BufferSpec::dynamic(SLOT_BASE_X, ElementKind::F32),
-        BufferSpec::dynamic(SLOT_BASE_Y, ElementKind::F32),
+        BufferSpec {
+            slot: SLOT_QUERY_META,
+            element_kind: ElementKind::U32,
+            layout: braid::BufferLayout::Dynamic,
+        },
+        BufferSpec {
+            slot: SLOT_QUERY_F32,
+            element_kind: ElementKind::F32,
+            layout: braid::BufferLayout::Dynamic,
+        },
+        BufferSpec {
+            slot: SLOT_QUERY_OFFSETS,
+            element_kind: ElementKind::U32,
+            layout: braid::BufferLayout::Dynamic,
+        },
+        BufferSpec {
+            slot: SLOT_BASE_X,
+            element_kind: ElementKind::F32,
+            layout: braid::BufferLayout::Dynamic,
+        },
+        BufferSpec {
+            slot: SLOT_BASE_Y,
+            element_kind: ElementKind::F32,
+            layout: braid::BufferLayout::Dynamic,
+        },
     ];
     if state.dimension == GraphDimension::D3 {
-        buffers.push(BufferSpec::dynamic(SLOT_BASE_Z, ElementKind::F32));
+        buffers.push(BufferSpec {
+            slot: SLOT_BASE_Z,
+            element_kind: ElementKind::F32,
+            layout: braid::BufferLayout::Dynamic,
+        });
     }
 
     for handle in sorted.iter().copied() {
@@ -1292,17 +1296,30 @@ fn compile_graph(
     }
 
     let mut stages = Vec::with_capacity(sorted.len() + 1);
-    stages.push(StageSpec::single(
-        KernelSpec::empty(match state.dimension {
-            GraphDimension::D2 => FastNoiseKernel::InitGrid2d.into(),
-            GraphDimension::D3 => FastNoiseKernel::InitGrid3d.into(),
-        })
-        .with_bindings([
-            BufferBinding::read(SLOT_QUERY_META),
-            BufferBinding::read(SLOT_QUERY_F32),
-            BufferBinding::read(SLOT_QUERY_OFFSETS),
-        ]),
-    ));
+    stages.push(StageSpec {
+        kernels: vec![KernelSpec {
+            kind_id: match state.dimension {
+                GraphDimension::D2 => FastNoiseKernel::InitGrid2d.kind(),
+                GraphDimension::D3 => FastNoiseKernel::InitGrid3d.kind(),
+            },
+            payload: Arc::from([]),
+            bindings: vec![
+                BufferBinding {
+                    slot: SLOT_QUERY_META,
+                    access: braid::BufferAccess::Read,
+                },
+                BufferBinding {
+                    slot: SLOT_QUERY_F32,
+                    access: braid::BufferAccess::Read,
+                },
+                BufferBinding {
+                    slot: SLOT_QUERY_OFFSETS,
+                    access: braid::BufferAccess::Read,
+                },
+            ],
+            dispatch: braid::DispatchHint::WholeBatch,
+        }],
+    });
 
     for handle in sorted.iter().copied() {
         let node = graph.node(handle);
@@ -1403,22 +1420,23 @@ fn compile_graph(
                 .encode(scratch)
             }
         }?;
-        stages.push(StageSpec::single(kernel));
+        stages.push(StageSpec {
+            kernels: vec![kernel],
+        });
     }
 
     let final_slot = expect_scalar_slot(scalar_slots.as_slice(), final_handle, "final field slot")?;
 
-    let mut plan = CompiledPlan::builder(FastNoisePlannerMeta {
-        dimension: state.dimension,
-        final_slot,
-    });
-    for buffer in buffers {
-        plan.buffer(buffer);
-    }
-    for stage in stages {
-        plan.stage(stage);
-    }
-    plan.build_checked()
+    let plan = CompiledPlan {
+        pipeline: braid::PipelineShape { buffers, stages },
+        static_buffers: Vec::new(),
+        planner_meta: FastNoisePlannerMeta {
+            dimension: state.dimension,
+            final_slot,
+        },
+    };
+    plan.validate()?;
+    Ok(plan)
 }
 
 fn validate_node_id(id: &str) -> BraidResult<()> {
@@ -1644,7 +1662,7 @@ fn resolve_position_source(
 }
 
 fn allocate_slot(next_slot: &mut u16) -> BufferSlot {
-    let slot = BufferSlot::new(*next_slot);
+    let slot = BufferSlot(*next_slot);
     *next_slot += 1;
     slot
 }
@@ -1661,7 +1679,11 @@ fn allocate_position_slots(next_slot: &mut u16, dimension: GraphDimension) -> Po
 }
 
 fn dynamic_f32_buffer(slot: BufferSlot) -> BufferSpec {
-    BufferSpec::dynamic(slot, ElementKind::F32)
+    BufferSpec {
+        slot,
+        element_kind: ElementKind::F32,
+        layout: braid::BufferLayout::Dynamic,
+    }
 }
 
 fn summarize_samples(values: &[f32]) -> ChunkSummary {
@@ -1807,7 +1829,7 @@ impl<'a> PayloadWriter<'a> {
     }
 
     fn slot(&mut self, value: BufferSlot) {
-        self.u16(value.raw());
+        self.u16(value.0);
     }
 
     fn u32(&mut self, value: u32) {
@@ -2052,7 +2074,7 @@ impl<'a> PayloadReader<'a> {
     }
 
     fn slot(&mut self) -> BraidResult<BufferSlot> {
-        Ok(BufferSlot::new(self.u16()?))
+        Ok(BufferSlot(self.u16()?))
     }
 
     fn u32(&mut self) -> BraidResult<u32> {
@@ -2537,13 +2559,15 @@ mod tests {
             )
             .expect("encode");
 
-        assert_eq!(packet.query_count(), 2);
+        assert_eq!(packet.query_count, 2);
         assert_eq!(
-            packet.u32(super::SLOT_QUERY_META).expect("meta"),
+            packet.slice::<u32>(super::SLOT_QUERY_META).expect("meta"),
             &[4, 3, 1, 2, 2, 1]
         );
         assert_eq!(
-            packet.u32(super::SLOT_QUERY_OFFSETS).expect("offsets"),
+            packet
+                .slice::<u32>(super::SLOT_QUERY_OFFSETS)
+                .expect("offsets"),
             &[0, 12, 16]
         );
     }
@@ -2557,11 +2581,11 @@ mod tests {
         let payload = SamplePayload {
             dimension: GraphDimension::D3,
             source: PositionSlots {
-                x: BufferSlot::new(41),
-                y: BufferSlot::new(42),
-                z: Some(BufferSlot::new(43)),
+                x: BufferSlot(41),
+                y: BufferSlot(42),
+                z: Some(BufferSlot(43)),
             },
-            output: BufferSlot::new(99),
+            output: BufferSlot(99),
             noise: noise.clone(),
         };
 

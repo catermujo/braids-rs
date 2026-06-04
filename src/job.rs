@@ -5,6 +5,44 @@ use crate::pipeline::{BufferData, BufferSlot, ElementKind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Typed element access contract for [`JobPacket`] buffers.
+pub trait PacketElement: Default + Sized {
+    /// Buffer element kind associated with this Rust type.
+    const KIND: ElementKind;
+
+    /// Return a shared typed slice view if the backing buffer matches.
+    fn get(data: &BufferData) -> Option<&[Self]>;
+
+    /// Return a mutable typed vector view if the backing buffer matches.
+    fn get_mut(data: &mut BufferData) -> Option<&mut Vec<Self>>;
+}
+
+macro_rules! impl_packet_element {
+    ($ty:ty, $tag:ident) => {
+        impl PacketElement for $ty {
+            const KIND: ElementKind = ElementKind::$tag;
+
+            fn get(data: &BufferData) -> Option<&[Self]> {
+                match data {
+                    BufferData::$tag(values) => Some(values.as_slice()),
+                    _ => None,
+                }
+            }
+
+            fn get_mut(data: &mut BufferData) -> Option<&mut Vec<Self>> {
+                match data {
+                    BufferData::$tag(values) => Some(values),
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+impl_packet_element!(u32, U32);
+impl_packet_element!(u64, U64);
+impl_packet_element!(f32, F32);
+
 #[derive(Clone, Default)]
 /// Cooperative cancellation flag shared with backend stage execution.
 pub struct CancelFlag {
@@ -50,7 +88,7 @@ pub struct PacketBuffer {
 #[derive(Debug, Default)]
 /// Reusable per-job mutable buffer set shared between planner and backend.
 pub struct JobPacket {
-    query_count: usize,
+    pub query_count: usize,
     buffers: Vec<PacketBuffer>,
 }
 
@@ -63,88 +101,45 @@ impl JobPacket {
         }
     }
 
-    /// Return the number of queries encoded into this packet.
-    pub fn query_count(&self) -> usize {
-        self.query_count
-    }
-
-    /// Set the number of queries encoded into this packet.
-    pub fn set_query_count(&mut self, query_count: usize) {
-        self.query_count = query_count;
-    }
-
     fn ensure_slot(&mut self, slot: BufferSlot, expected: ElementKind) -> usize {
         for (idx, buffer) in self.buffers.iter_mut().enumerate() {
             if buffer.slot != slot {
                 continue;
             }
             if buffer.data.kind() != expected {
-                buffer.data = match expected {
-                    ElementKind::U32 => BufferData::U32(Vec::new()),
-                    ElementKind::U64 => BufferData::U64(Vec::new()),
-                    ElementKind::F32 => BufferData::F32(Vec::new()),
-                };
+                buffer.data = BufferData::empty(expected);
             }
             return idx;
         }
 
         self.buffers.push(PacketBuffer {
             slot,
-            data: match expected {
-                ElementKind::U32 => BufferData::U32(Vec::new()),
-                ElementKind::U64 => BufferData::U64(Vec::new()),
-                ElementKind::F32 => BufferData::F32(Vec::new()),
-            },
+            data: BufferData::empty(expected),
         });
         self.buffers.len() - 1
     }
 
-    /// Ensure a `u32` buffer exists at `slot` and resize it to `len`.
-    pub fn ensure_u32(&mut self, slot: BufferSlot, len: usize) -> &mut Vec<u32> {
-        let idx = self.ensure_slot(slot, ElementKind::U32);
-        match &mut self.buffers[idx].data {
-            BufferData::U32(vals) => {
-                vals.resize(len, 0);
-                vals
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    /// Ensure a `u64` buffer exists at `slot` and resize it to `len`.
-    pub fn ensure_u64(&mut self, slot: BufferSlot, len: usize) -> &mut Vec<u64> {
-        let idx = self.ensure_slot(slot, ElementKind::U64);
-        match &mut self.buffers[idx].data {
-            BufferData::U64(vals) => {
-                vals.resize(len, 0);
-                vals
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    /// Ensure an `f32` buffer exists at `slot` and resize it to `len`.
-    pub fn ensure_f32(&mut self, slot: BufferSlot, len: usize) -> &mut Vec<f32> {
-        let idx = self.ensure_slot(slot, ElementKind::F32);
-        match &mut self.buffers[idx].data {
-            BufferData::F32(vals) => {
-                vals.resize(len, 0.0);
-                vals
-            }
-            _ => unreachable!(),
-        }
+    /// Ensure a typed buffer exists at `slot` and resize it to `len`.
+    pub fn ensure<T: PacketElement>(&mut self, slot: BufferSlot, len: usize) -> &mut Vec<T> {
+        let idx = self.ensure_slot(slot, T::KIND);
+        let values = T::get_mut(&mut self.buffers[idx].data).expect("buffer kind mismatch");
+        values.resize_with(len, T::default);
+        values
     }
 
     pub(crate) fn load_static_buffer(&mut self, slot: BufferSlot, data: &BufferData) {
         match data {
             BufferData::U32(values) => {
-                self.ensure_u32(slot, values.len()).copy_from_slice(values);
+                self.ensure::<u32>(slot, values.len())
+                    .copy_from_slice(values);
             }
             BufferData::U64(values) => {
-                self.ensure_u64(slot, values.len()).copy_from_slice(values);
+                self.ensure::<u64>(slot, values.len())
+                    .copy_from_slice(values);
             }
             BufferData::F32(values) => {
-                self.ensure_f32(slot, values.len()).copy_from_slice(values);
+                self.ensure::<f32>(slot, values.len())
+                    .copy_from_slice(values);
             }
         }
     }
@@ -157,72 +152,100 @@ impl JobPacket {
             .map(|buffer| (buffer.slot, buffer.data.kind(), buffer.data.len()))
     }
 
-    /// Read-only typed `u32` view for one slot.
-    pub fn u32(&self, slot: BufferSlot) -> BraidResult<&[u32]> {
-        self.view(slot, ElementKind::U32)
-            .and_then(|buffer| match buffer {
-                BufferData::U32(vals) => Ok(vals.as_slice()),
-                _ => unreachable!(),
-            })
+    /// Read-only typed slice for one slot.
+    pub fn slice<T: PacketElement>(&self, slot: BufferSlot) -> BraidResult<&[T]> {
+        let buffer = self
+            .buffers
+            .iter()
+            .find(|buffer| buffer.slot == slot)
+            .ok_or(BraidError::MissingBuffer(slot))?;
+        T::get(&buffer.data).ok_or(BraidError::InvalidBufferType {
+            slot,
+            expected: T::KIND,
+        })
     }
 
-    /// Mutable typed `u32` view for one slot.
-    pub fn u32_mut(&mut self, slot: BufferSlot) -> BraidResult<&mut [u32]> {
-        self.view_mut(slot, ElementKind::U32)
-            .and_then(|buffer| match buffer {
-                BufferData::U32(vals) => Ok(vals.as_mut_slice()),
-                _ => unreachable!(),
-            })
+    /// Mutable typed slice for one slot.
+    pub fn slice_mut<T: PacketElement>(&mut self, slot: BufferSlot) -> BraidResult<&mut [T]> {
+        let buffer = self
+            .buffers
+            .iter_mut()
+            .find(|buffer| buffer.slot == slot)
+            .ok_or(BraidError::MissingBuffer(slot))?;
+        let values = T::get_mut(&mut buffer.data).ok_or(BraidError::InvalidBufferType {
+            slot,
+            expected: T::KIND,
+        })?;
+        Ok(values.as_mut_slice())
     }
 
-    /// Read-only typed `u64` view for one slot.
-    pub fn u64(&self, slot: BufferSlot) -> BraidResult<&[u64]> {
-        self.view(slot, ElementKind::U64)
-            .and_then(|buffer| match buffer {
-                BufferData::U64(vals) => Ok(vals.as_slice()),
-                _ => unreachable!(),
-            })
+    /// Read one slot as fixed-width groups of `N` elements.
+    pub fn slice_many<T: PacketElement, const N: usize>(
+        &self,
+        slot: BufferSlot,
+    ) -> BraidResult<&[[T; N]]> {
+        if N == 0 {
+            return Err(BraidError::InvalidSpec(
+                "slice_many requires width greater than zero".to_owned(),
+            ));
+        }
+        let values = self.slice::<T>(slot)?;
+        let (chunks, remainder) = values.as_chunks::<N>();
+        if !remainder.is_empty() {
+            return Err(BraidError::InvalidSpec(format!(
+                "buffer slot {} length {} not divisible by width {}",
+                slot,
+                values.len(),
+                N
+            )));
+        }
+        Ok(chunks)
     }
 
-    /// Read-only typed `f32` view for one slot.
-    pub fn f32(&self, slot: BufferSlot) -> BraidResult<&[f32]> {
-        self.view(slot, ElementKind::F32)
-            .and_then(|buffer| match buffer {
-                BufferData::F32(vals) => Ok(vals.as_slice()),
-                _ => unreachable!(),
-            })
-    }
-
-    /// Mutable typed `f32` view for one slot.
-    pub fn f32_mut(&mut self, slot: BufferSlot) -> BraidResult<&mut [f32]> {
-        self.view_mut(slot, ElementKind::F32)
-            .and_then(|buffer| match buffer {
-                BufferData::F32(vals) => Ok(vals.as_mut_slice()),
-                _ => unreachable!(),
-            })
-    }
-
-    /// Borrow several distinct `f32` buffers at once.
-    ///
-    /// This is useful for kernels that need multiple mutable `f32` slices without copying.
-    pub fn with_f32_buffers<R>(
+    /// Mutably borrow one slot as fixed-width groups of `N` elements.
+    pub fn slice_many_mut<T: PacketElement, const N: usize>(
         &mut self,
-        slots: &[BufferSlot],
-        f: impl FnOnce(Vec<&mut [f32]>) -> BraidResult<R>,
+        slot: BufferSlot,
+    ) -> BraidResult<&mut [[T; N]]> {
+        if N == 0 {
+            return Err(BraidError::InvalidSpec(
+                "slice_many_mut requires width greater than zero".to_owned(),
+            ));
+        }
+        let values = self.slice_mut::<T>(slot)?;
+        let len = values.len();
+        let (chunks, remainder) = values.as_chunks_mut::<N>();
+        if !remainder.is_empty() {
+            return Err(BraidError::InvalidSpec(format!(
+                "buffer slot {} length {} not divisible by width {}",
+                slot, len, N
+            )));
+        }
+        Ok(chunks)
+    }
+
+    /// Borrow several distinct typed slot slices at once.
+    ///
+    /// This is useful for kernels that need multiple mutable slices from the same packet without
+    /// copying.
+    pub fn with_slices<T: PacketElement, const N: usize, R>(
+        &mut self,
+        slots: [BufferSlot; N],
+        f: impl FnOnce([&mut [T]; N]) -> BraidResult<R>,
     ) -> BraidResult<R> {
         let mut indices = Vec::with_capacity(slots.len());
         for slot in slots {
-            let Some(index) = self.buffers.iter().position(|buffer| buffer.slot == *slot) else {
-                return Err(BraidError::MissingBuffer(*slot));
+            let Some(index) = self.buffers.iter().position(|buffer| buffer.slot == slot) else {
+                return Err(BraidError::MissingBuffer(slot));
             };
             if indices.contains(&index) {
-                return Err(BraidError::from("duplicate f32 buffer slot request"));
+                return Err(BraidError::from("duplicate typed buffer slot request"));
             }
             let buffer = &self.buffers[index];
-            if buffer.data.kind() != ElementKind::F32 {
+            if buffer.data.kind() != T::KIND {
                 return Err(BraidError::InvalidBufferType {
-                    slot: *slot,
-                    expected: ElementKind::F32,
+                    slot: slot,
+                    expected: T::KIND,
                 });
             }
             indices.push(index);
@@ -231,10 +254,8 @@ impl JobPacket {
         let mut ptrs = Vec::with_capacity(indices.len());
         for index in indices {
             let buffer = &mut self.buffers[index];
-            match &mut buffer.data {
-                BufferData::F32(vals) => ptrs.push(vals.as_mut_slice() as *mut [f32]),
-                _ => unreachable!(),
-            }
+            let values = T::get_mut(&mut buffer.data).expect("buffer kind mismatch");
+            ptrs.push(values.as_mut_slice() as *mut [T]);
         }
 
         let mut views = Vec::with_capacity(ptrs.len());
@@ -244,34 +265,9 @@ impl JobPacket {
                 views.push(&mut *ptr);
             }
         }
-        f(views)
-    }
-
-    fn view(&self, slot: BufferSlot, expected: ElementKind) -> BraidResult<&BufferData> {
-        let buffer = self
-            .buffers
-            .iter()
-            .find(|buffer| buffer.slot == slot)
-            .ok_or(BraidError::MissingBuffer(slot))?;
-        if buffer.data.kind() != expected {
-            return Err(BraidError::InvalidBufferType { slot, expected });
-        }
-        Ok(&buffer.data)
-    }
-
-    fn view_mut(
-        &mut self,
-        slot: BufferSlot,
-        expected: ElementKind,
-    ) -> BraidResult<&mut BufferData> {
-        let buffer = self
-            .buffers
-            .iter_mut()
-            .find(|buffer| buffer.slot == slot)
-            .ok_or(BraidError::MissingBuffer(slot))?;
-        if buffer.data.kind() != expected {
-            return Err(BraidError::InvalidBufferType { slot, expected });
-        }
-        Ok(&mut buffer.data)
+        f(views
+            .try_into()
+            .map_err(|_| BraidError::from("typed buffer slot count mismatch"))
+            .unwrap())
     }
 }

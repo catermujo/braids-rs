@@ -64,19 +64,7 @@ pub enum DispatchHint {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
 /// Opaque numeric slot identifier for packet and static buffers.
-pub struct BufferSlot(u16);
-
-impl BufferSlot {
-    /// Create a slot from its raw numeric value.
-    pub const fn new(raw: u16) -> Self {
-        Self(raw)
-    }
-
-    /// Return the raw numeric slot value.
-    pub const fn raw(self) -> u16 {
-        self.0
-    }
-}
+pub struct BufferSlot(pub u16);
 
 impl Display for BufferSlot {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -86,32 +74,20 @@ impl Display for BufferSlot {
 
 impl From<u16> for BufferSlot {
     fn from(value: u16) -> Self {
-        Self::new(value)
+        Self(value)
     }
 }
 
 impl From<BufferSlot> for u16 {
     fn from(value: BufferSlot) -> Self {
-        value.raw()
+        value.0
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
 /// Opaque numeric identifier for backend kernel implementations.
-pub struct KernelKind(u32);
-
-impl KernelKind {
-    /// Create a kernel kind from its raw numeric value.
-    pub const fn new(raw: u32) -> Self {
-        Self(raw)
-    }
-
-    /// Return the raw numeric kernel kind value.
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-}
+pub struct KernelKind(pub u32);
 
 impl Display for KernelKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -121,13 +97,13 @@ impl Display for KernelKind {
 
 impl From<u32> for KernelKind {
     fn from(value: u32) -> Self {
-        Self::new(value)
+        Self(value)
     }
 }
 
 impl From<KernelKind> for u32 {
     fn from(value: KernelKind) -> Self {
-        value.raw()
+        value.0
     }
 }
 
@@ -143,34 +119,6 @@ pub struct BufferSpec {
 }
 
 impl BufferSpec {
-    /// Create a custom buffer declaration.
-    pub const fn new(slot: BufferSlot, element_kind: ElementKind, layout: BufferLayout) -> Self {
-        Self {
-            slot,
-            element_kind,
-            layout,
-        }
-    }
-
-    /// Declare a scalar-per-query buffer.
-    pub const fn per_query_scalar(slot: BufferSlot, element_kind: ElementKind) -> Self {
-        Self::new(slot, element_kind, BufferLayout::PerQueryScalar)
-    }
-
-    /// Declare a fixed-width vector-per-query buffer.
-    pub const fn per_query_vector(
-        slot: BufferSlot,
-        element_kind: ElementKind,
-        width: usize,
-    ) -> Self {
-        Self::new(slot, element_kind, BufferLayout::PerQueryVector { width })
-    }
-
-    /// Declare a planner/backend-managed dynamic buffer.
-    pub const fn dynamic(slot: BufferSlot, element_kind: ElementKind) -> Self {
-        Self::new(slot, element_kind, BufferLayout::Dynamic)
-    }
-
     fn validate_len(&self, query_count: usize, len: usize) -> BraidResult<()> {
         let expected_len = match self.layout {
             BufferLayout::PerQueryScalar => Some(query_count),
@@ -205,28 +153,6 @@ pub struct BufferBinding {
     pub access: BufferAccess,
 }
 
-impl BufferBinding {
-    /// Create a generic buffer binding.
-    pub const fn new(slot: BufferSlot, access: BufferAccess) -> Self {
-        Self { slot, access }
-    }
-
-    /// Read-only binding helper.
-    pub const fn read(slot: BufferSlot) -> Self {
-        Self::new(slot, BufferAccess::Read)
-    }
-
-    /// Write-only binding helper.
-    pub const fn write(slot: BufferSlot) -> Self {
-        Self::new(slot, BufferAccess::Write)
-    }
-
-    /// Read-write binding helper.
-    pub const fn read_write(slot: BufferSlot) -> Self {
-        Self::new(slot, BufferAccess::ReadWrite)
-    }
-}
-
 #[derive(Clone, Debug)]
 /// One compiled kernel invocation inside a stage.
 pub struct KernelSpec {
@@ -240,49 +166,11 @@ pub struct KernelSpec {
     pub dispatch: DispatchHint,
 }
 
-impl KernelSpec {
-    /// Create one kernel spec with payload bytes.
-    pub fn new(kind_id: KernelKind, payload: impl Into<Arc<[u8]>>) -> Self {
-        Self {
-            kind_id,
-            payload: payload.into(),
-            bindings: Vec::new(),
-            dispatch: DispatchHint::WholeBatch,
-        }
-    }
-
-    /// Create one kernel spec with no payload.
-    pub fn empty(kind_id: KernelKind) -> Self {
-        Self::new(kind_id, Vec::<u8>::new())
-    }
-
-    /// Attach buffer bindings to the kernel.
-    pub fn with_bindings(mut self, bindings: impl IntoIterator<Item = BufferBinding>) -> Self {
-        self.bindings.extend(bindings);
-        self
-    }
-
-    /// Override the kernel dispatch hint.
-    pub const fn with_dispatch(mut self, dispatch: DispatchHint) -> Self {
-        self.dispatch = dispatch;
-        self
-    }
-}
-
 #[derive(Clone, Debug, Default)]
 /// Barrier-separated group of kernels.
 pub struct StageSpec {
     /// Kernels executed within this stage.
     pub kernels: Vec<KernelSpec>,
-}
-
-impl StageSpec {
-    /// Helper for a one-kernel stage.
-    pub fn single(kernel: KernelSpec) -> Self {
-        Self {
-            kernels: vec![kernel],
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -303,6 +191,15 @@ pub enum BufferData {
 }
 
 impl BufferData {
+    /// Create an empty buffer for one declared element kind.
+    pub(crate) fn empty(kind: ElementKind) -> Self {
+        match kind {
+            ElementKind::U32 => Self::U32(Vec::new()),
+            ElementKind::U64 => Self::U64(Vec::new()),
+            ElementKind::F32 => Self::F32(Vec::new()),
+        }
+    }
+
     /// Return the element type of this buffer.
     pub fn kind(&self) -> ElementKind {
         match self {
@@ -340,13 +237,6 @@ pub struct StaticBuffer {
     pub data: BufferData,
 }
 
-impl StaticBuffer {
-    /// Create one static buffer.
-    pub fn new(slot: BufferSlot, data: BufferData) -> Self {
-        Self { slot, data }
-    }
-}
-
 /// Collection of static buffers attached to a compiled plan.
 pub type StaticBufferSet = Vec<StaticBuffer>;
 
@@ -362,11 +252,6 @@ pub struct CompiledPlan<M> {
 }
 
 impl<M> CompiledPlan<M> {
-    /// Start building a compiled plan with planner metadata.
-    pub fn builder(planner_meta: M) -> PlanBuilder<M> {
-        PlanBuilder::new(planner_meta)
-    }
-
     /// Validate slot declarations, static buffers, and kernel bindings.
     pub fn validate(&self) -> BraidResult<()> {
         let specs = self.specs_by_slot()?;
@@ -426,7 +311,7 @@ impl<M> CompiledPlan<M> {
                     expected: spec.element_kind,
                 });
             }
-            spec.validate_len(packet.query_count(), len)?;
+            spec.validate_len(packet.query_count, len)?;
         }
 
         Ok(())
@@ -443,58 +328,5 @@ impl<M> CompiledPlan<M> {
             }
         }
         Ok(specs)
-    }
-}
-
-#[derive(Clone, Debug)]
-/// Convenience builder for [`CompiledPlan`].
-pub struct PlanBuilder<M> {
-    pipeline: PipelineShape,
-    static_buffers: StaticBufferSet,
-    planner_meta: M,
-}
-
-impl<M> PlanBuilder<M> {
-    /// Create an empty plan builder with planner metadata.
-    pub fn new(planner_meta: M) -> Self {
-        Self {
-            pipeline: PipelineShape::default(),
-            static_buffers: Vec::new(),
-            planner_meta,
-        }
-    }
-
-    /// Append one buffer declaration.
-    pub fn buffer(&mut self, spec: BufferSpec) -> &mut Self {
-        self.pipeline.buffers.push(spec);
-        self
-    }
-
-    /// Append one stage.
-    pub fn stage(&mut self, stage: StageSpec) -> &mut Self {
-        self.pipeline.stages.push(stage);
-        self
-    }
-
-    /// Append one static buffer.
-    pub fn static_buffer(&mut self, buffer: StaticBuffer) -> &mut Self {
-        self.static_buffers.push(buffer);
-        self
-    }
-
-    /// Build without validation.
-    pub fn build(self) -> CompiledPlan<M> {
-        CompiledPlan {
-            pipeline: self.pipeline,
-            static_buffers: self.static_buffers,
-            planner_meta: self.planner_meta,
-        }
-    }
-
-    /// Build and validate the final plan.
-    pub fn build_checked(self) -> BraidResult<CompiledPlan<M>> {
-        let plan = self.build();
-        plan.validate()?;
-        Ok(plan)
     }
 }

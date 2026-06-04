@@ -12,10 +12,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const TOY_INPUT_SLOT: BufferSlot = BufferSlot::new(0);
-const TOY_OUTPUT_SLOT: BufferSlot = BufferSlot::new(1);
-const TOY_BONUS_SLOT: BufferSlot = BufferSlot::new(2);
-const TOY_KIND: KernelKind = KernelKind::new(77);
+const TOY_INPUT_SLOT: BufferSlot = BufferSlot(0);
+const TOY_OUTPUT_SLOT: BufferSlot = BufferSlot(1);
+const TOY_BONUS_SLOT: BufferSlot = BufferSlot(2);
+const TOY_KIND: KernelKind = KernelKind(77);
 
 #[derive(Default)]
 struct ToyPlanner;
@@ -100,28 +100,55 @@ impl PlannerBackend for ToyPlanner {
         scratch
             .bytes
             .extend_from_slice(&state.delay_ms.to_le_bytes());
-        let mut plan = CompiledPlan::builder(());
-        plan.buffer(BufferSpec::per_query_scalar(
-            TOY_INPUT_SLOT,
-            ElementKind::U32,
-        ))
-        .buffer(BufferSpec::per_query_scalar(
-            TOY_OUTPUT_SLOT,
-            ElementKind::U32,
-        ))
-        .buffer(BufferSpec::dynamic(TOY_BONUS_SLOT, ElementKind::U32))
-        .stage(StageSpec::single(
-            KernelSpec::new(TOY_KIND, scratch.bytes.clone()).with_bindings([
-                BufferBinding::read(TOY_INPUT_SLOT),
-                BufferBinding::write(TOY_OUTPUT_SLOT),
-                BufferBinding::read(TOY_BONUS_SLOT),
-            ]),
-        ))
-        .static_buffer(StaticBuffer::new(
-            TOY_BONUS_SLOT,
-            BufferData::U32(vec![state.bonus]),
-        ));
-        plan.build_checked()
+        let plan = CompiledPlan {
+            pipeline: crate::pipeline::PipelineShape {
+                buffers: vec![
+                    BufferSpec {
+                        slot: TOY_INPUT_SLOT,
+                        element_kind: ElementKind::U32,
+                        layout: crate::pipeline::BufferLayout::PerQueryScalar,
+                    },
+                    BufferSpec {
+                        slot: TOY_OUTPUT_SLOT,
+                        element_kind: ElementKind::U32,
+                        layout: crate::pipeline::BufferLayout::PerQueryScalar,
+                    },
+                    BufferSpec {
+                        slot: TOY_BONUS_SLOT,
+                        element_kind: ElementKind::U32,
+                        layout: crate::pipeline::BufferLayout::Dynamic,
+                    },
+                ],
+                stages: vec![StageSpec {
+                    kernels: vec![KernelSpec {
+                        kind_id: TOY_KIND,
+                        payload: scratch.bytes.clone().into(),
+                        bindings: vec![
+                            BufferBinding {
+                                slot: TOY_INPUT_SLOT,
+                                access: crate::pipeline::BufferAccess::Read,
+                            },
+                            BufferBinding {
+                                slot: TOY_OUTPUT_SLOT,
+                                access: crate::pipeline::BufferAccess::Write,
+                            },
+                            BufferBinding {
+                                slot: TOY_BONUS_SLOT,
+                                access: crate::pipeline::BufferAccess::Read,
+                            },
+                        ],
+                        dispatch: crate::pipeline::DispatchHint::WholeBatch,
+                    }],
+                }],
+            },
+            static_buffers: vec![StaticBuffer {
+                slot: TOY_BONUS_SLOT,
+                data: BufferData::U32(vec![state.bonus]),
+            }],
+            planner_meta: (),
+        };
+        plan.validate()?;
+        Ok(plan)
     }
 
     fn encode_batch(
@@ -131,11 +158,11 @@ impl PlannerBackend for ToyPlanner {
         packet: &mut JobPacket,
         _scratch: &mut BatchScratch,
     ) -> BraidResult<()> {
-        packet.set_query_count(queries.len());
+        packet.query_count = queries.len();
         packet
-            .ensure_u32(TOY_INPUT_SLOT, queries.len())
+            .ensure::<u32>(TOY_INPUT_SLOT, queries.len())
             .copy_from_slice(queries);
-        packet.ensure_u32(TOY_OUTPUT_SLOT, queries.len()).fill(0);
+        packet.ensure::<u32>(TOY_OUTPUT_SLOT, queries.len()).fill(0);
         Ok(())
     }
 
@@ -144,7 +171,7 @@ impl PlannerBackend for ToyPlanner {
         _plan: &CompiledPlan<Self::PlannerMeta>,
         packet: &JobPacket,
     ) -> BraidResult<Vec<Self::Resolution>> {
-        Ok(packet.u32(TOY_OUTPUT_SLOT)?.to_vec())
+        Ok(packet.slice::<u32>(TOY_OUTPUT_SLOT)?.to_vec())
     }
 }
 
@@ -174,9 +201,9 @@ impl ComputeBackend for ToyBackend {
         if cancel.is_cancelled() {
             return Err(BraidError::Cancelled);
         }
-        let inputs = packet.u32(TOY_INPUT_SLOT)?.to_vec();
+        let inputs = packet.slice::<u32>(TOY_INPUT_SLOT)?.to_vec();
         let bonus = packet
-            .u32(TOY_BONUS_SLOT)?
+            .slice::<u32>(TOY_BONUS_SLOT)?
             .first()
             .copied()
             .ok_or_else(|| BraidError::from("missing toy bonus buffer value"))?;
@@ -185,7 +212,7 @@ impl ComputeBackend for ToyBackend {
             outputs[ix] = value + bonus + prepared.bonus;
         }
         packet
-            .u32_mut(TOY_OUTPUT_SLOT)?
+            .slice_mut::<u32>(TOY_OUTPUT_SLOT)?
             .copy_from_slice(outputs.as_slice());
         Ok(())
     }
@@ -244,6 +271,29 @@ fn failed_update_rolls_back_state() {
     assert!(version_after > version_before);
     let job = stack.dispatch(vec![10]).unwrap();
     assert_eq!(stack.collect(job).unwrap(), vec![11]);
+}
+
+#[test]
+fn packet_slice_many_groups_flat_buffers() {
+    let mut packet = JobPacket::default();
+    packet
+        .ensure::<f32>(TOY_INPUT_SLOT, 6)
+        .copy_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let pairs = packet.slice_many::<f32, 2>(TOY_INPUT_SLOT).unwrap();
+    assert_eq!(pairs, &[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]);
+
+    {
+        let pairs_mut = packet.slice_many_mut::<f32, 2>(TOY_INPUT_SLOT).unwrap();
+        pairs_mut[1][0] = 30.0;
+        pairs_mut[1][1] = 40.0;
+    }
+
+    assert_eq!(
+        packet.slice::<f32>(TOY_INPUT_SLOT).unwrap(),
+        &[1.0, 2.0, 30.0, 40.0, 5.0, 6.0]
+    );
+    assert!(packet.slice_many::<f32, 4>(TOY_INPUT_SLOT).is_err());
 }
 
 #[test]

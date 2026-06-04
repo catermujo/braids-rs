@@ -10,9 +10,9 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const DATA_SLOT: BufferSlot = BufferSlot::new(0);
-const STAGE_SCAN_KIND: KernelKind = KernelKind::new(0xB100);
-const STAGE_FINISH_KIND: KernelKind = KernelKind::new(0xB200);
+const DATA_SLOT: BufferSlot = BufferSlot(0);
+const STAGE_SCAN_KIND: KernelKind = KernelKind(0xB100);
+const STAGE_FINISH_KIND: KernelKind = KernelKind(0xB200);
 const COMPILE_HEAVY_ROUNDS: u32 = 60_000;
 const PREPARE_HEAVY_ROUNDS: u32 = 50_000;
 
@@ -292,17 +292,43 @@ impl PlannerBackend for BenchPlanner {
         let scan_payload = encode_scan_payload(state, scratch);
         let finish_payload = encode_finish_payload(state, scratch);
 
-        let mut plan = CompiledPlan::builder(());
-        plan.buffer(BufferSpec::per_query_scalar(DATA_SLOT, ElementKind::U32))
-            .stage(StageSpec::single(
-                KernelSpec::new(STAGE_SCAN_KIND, scan_payload)
-                    .with_bindings([BufferBinding::read_write(DATA_SLOT)]),
-            ))
-            .stage(StageSpec::single(
-                KernelSpec::new(STAGE_FINISH_KIND, finish_payload)
-                    .with_bindings([BufferBinding::read_write(DATA_SLOT)]),
-            ));
-        plan.build_checked()
+        let plan = CompiledPlan {
+            pipeline: braid::PipelineShape {
+                buffers: vec![BufferSpec {
+                    slot: DATA_SLOT,
+                    element_kind: ElementKind::U32,
+                    layout: braid::BufferLayout::PerQueryScalar,
+                }],
+                stages: vec![
+                    StageSpec {
+                        kernels: vec![KernelSpec {
+                            kind_id: STAGE_SCAN_KIND,
+                            payload: scan_payload.into(),
+                            bindings: vec![BufferBinding {
+                                slot: DATA_SLOT,
+                                access: braid::BufferAccess::ReadWrite,
+                            }],
+                            dispatch: braid::DispatchHint::WholeBatch,
+                        }],
+                    },
+                    StageSpec {
+                        kernels: vec![KernelSpec {
+                            kind_id: STAGE_FINISH_KIND,
+                            payload: finish_payload.into(),
+                            bindings: vec![BufferBinding {
+                                slot: DATA_SLOT,
+                                access: braid::BufferAccess::ReadWrite,
+                            }],
+                            dispatch: braid::DispatchHint::WholeBatch,
+                        }],
+                    },
+                ],
+            },
+            static_buffers: Vec::new(),
+            planner_meta: (),
+        };
+        plan.validate()?;
+        Ok(plan)
     }
 
     fn encode_batch(
@@ -321,9 +347,9 @@ impl PlannerBackend for BenchPlanner {
         } else {
             None
         };
-        packet.set_query_count(queries.len());
+        packet.query_count = queries.len();
         packet
-            .ensure_u32(DATA_SLOT, queries.len())
+            .ensure::<u32>(DATA_SLOT, queries.len())
             .copy_from_slice(queries);
         Ok(())
     }
@@ -342,7 +368,7 @@ impl PlannerBackend for BenchPlanner {
         } else {
             None
         };
-        Ok(packet.u32(DATA_SLOT)?.to_vec())
+        Ok(packet.slice::<u32>(DATA_SLOT)?.to_vec())
     }
 }
 
@@ -457,7 +483,7 @@ impl ComputeBackend for BenchBackend {
             return Err(BraidError::Cancelled);
         }
 
-        let values = packet.u32_mut(DATA_SLOT)?;
+        let values = packet.slice_mut::<u32>(DATA_SLOT)?;
         match stage_index {
             0 => run_scan_stage(prepared, values, cancel),
             1 => run_finish_stage(prepared, values, cancel),

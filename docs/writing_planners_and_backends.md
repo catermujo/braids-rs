@@ -152,12 +152,12 @@ That gives a real end-to-end stack quickly.
 
 ## Building A Plan
 
-Most planners should compile through `PlanBuilder`:
+Most planners should build `CompiledPlan` directly with explicit literals:
 
 1. declare buffer slots
 2. add stages
 3. add static buffers if needed
-4. call `build_checked()`
+4. call `plan.validate()?`
 
 This keeps validation in one place.
 
@@ -167,8 +167,8 @@ Use `JobPacket` as the only mutable per-job data container.
 
 Typical encode flow:
 
-1. call `packet.set_query_count(...)`
-2. size buffers with `ensure_u32`, `ensure_u64`, or `ensure_f32`
+1. assign `packet.query_count = ...`
+2. size buffers with `ensure::<T>(...)`
 3. fill those buffers in planner-owned layout
 
 Keep packet layout deterministic. Decoder should not guess.
