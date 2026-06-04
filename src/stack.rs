@@ -119,9 +119,7 @@ where
         let compiled = planner.compile(&state, &mut planner_scratch)?;
 
         let mut compute_scratch = ComputeScratch::default();
-        let prepared = backend
-            .backend
-            .prepare(&compiled, None, &mut compute_scratch)?;
+        let prepared = backend.prepare_blocking(&compiled, None, &mut compute_scratch)?;
         let version = Arc::new(FrozenStackVersion::<P, C> {
             id: 1,
             compiled,
@@ -326,8 +324,7 @@ where
         };
         let prepared = self
             .backend
-            .backend
-            .prepare(&compiled, reuse, &mut compute_scratch)?;
+            .prepare_blocking(&compiled, reuse, &mut compute_scratch)?;
         self.compute_scratch_pool
             .give_back("stack.compute_scratch", compute_scratch)?;
 

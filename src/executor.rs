@@ -35,13 +35,16 @@ impl Default for BackendConfig {
 
 struct BackendQueueState {
     lane_count: usize,
+    prepare_lane_count: usize,
     lanes_in_use: usize,
+    prepares_in_use: usize,
     waiting: VecDeque<Box<dyn RunnableTask>>,
 }
 
 struct BackendRuntime {
     executor: Weak<ExecutorInner>,
     state: Mutex<BackendQueueState>,
+    prepare_wake: Condvar,
 }
 
 pub struct BackendHandle<C>
@@ -108,15 +111,30 @@ impl BraidExecutor {
     where
         C: ComputeBackend,
     {
+        self.register_backend_with_prepare_lanes(backend, config.lane_count, config.lane_count)
+    }
+
+    pub fn register_backend_with_prepare_lanes<C>(
+        &self,
+        backend: Arc<C>,
+        lane_count: usize,
+        prepare_lane_count: usize,
+    ) -> BackendHandle<C>
+    where
+        C: ComputeBackend,
+    {
         BackendHandle {
             backend,
             runtime: Arc::new(BackendRuntime {
                 executor: Arc::downgrade(&self.inner),
                 state: Mutex::new(BackendQueueState {
-                    lane_count: config.lane_count.max(1),
+                    lane_count: lane_count.max(1),
+                    prepare_lane_count: prepare_lane_count.max(1).min(lane_count.max(1)),
                     lanes_in_use: 0,
+                    prepares_in_use: 0,
                     waiting: VecDeque::new(),
                 }),
+                prepare_wake: Condvar::new(),
             }),
         }
     }
@@ -165,6 +183,16 @@ where
     {
         self.runtime.schedule(Box::new(TaskFn { func: Some(task) }))
     }
+
+    pub(crate) fn prepare_blocking<M: Send + Sync + 'static>(
+        &self,
+        plan: &crate::pipeline::CompiledPlan<M>,
+        reuse: Option<C::Prepared>,
+        scratch: &mut crate::scratch::ComputeScratch,
+    ) -> BraidResult<C::Prepared> {
+        let _permit = self.runtime.acquire_prepare()?;
+        self.backend.prepare(plan, reuse, scratch)
+    }
 }
 
 impl BackendRuntime {
@@ -189,6 +217,38 @@ impl BackendRuntime {
         Ok(())
     }
 
+    fn acquire_prepare(self: &Arc<Self>) -> BraidResult<PreparePermit> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| BraidError::poisoned("backend_runtime.state"))?;
+        loop {
+            let Some(executor) = self.executor.upgrade() else {
+                return Err(BraidError::ExecutorShutdown);
+            };
+            if executor.shutdown.load(Ordering::Acquire) {
+                return Err(BraidError::ExecutorShutdown);
+            }
+
+            if state.waiting.is_empty()
+                && state.lanes_in_use < state.lane_count
+                && state.prepares_in_use < state.prepare_lane_count
+            {
+                state.lanes_in_use += 1;
+                state.prepares_in_use += 1;
+                return Ok(PreparePermit {
+                    runtime: Arc::clone(self),
+                    active: true,
+                });
+            }
+
+            state = self
+                .prepare_wake
+                .wait(state)
+                .map_err(|_| BraidError::poisoned("backend_runtime.state"))?;
+        }
+    }
+
     fn finish_lane(self: &Arc<Self>) {
         let next = {
             let mut state = match self.state.lock() {
@@ -208,8 +268,37 @@ impl BackendRuntime {
                 if let Ok(mut state) = self.state.lock() {
                     state.lanes_in_use = state.lanes_in_use.saturating_sub(1);
                 }
+                self.prepare_wake.notify_all();
+            }
+        } else {
+            self.prepare_wake.notify_all();
+        }
+    }
+
+    fn finish_prepare(self: &Arc<Self>) {
+        let next = {
+            let mut state = match self.state.lock() {
+                Ok(state) => state,
+                Err(_) => return,
+            };
+            state.prepares_in_use = state.prepares_in_use.saturating_sub(1);
+            state.lanes_in_use = state.lanes_in_use.saturating_sub(1);
+            if let Some(task) = state.waiting.pop_front() {
+                state.lanes_in_use += 1;
+                Some(task)
+            } else {
+                None
+            }
+        };
+
+        if let Some(task) = next {
+            if self.submit_ready(task).is_err() {
+                if let Ok(mut state) = self.state.lock() {
+                    state.lanes_in_use = state.lanes_in_use.saturating_sub(1);
+                }
             }
         }
+        self.prepare_wake.notify_all();
     }
 
     fn submit_ready(self: &Arc<Self>, task: Box<dyn RunnableTask>) -> BraidResult<()> {
@@ -232,6 +321,21 @@ impl BackendRuntime {
         }
 
         Ok(())
+    }
+}
+
+struct PreparePermit {
+    runtime: Arc<BackendRuntime>,
+    active: bool,
+}
+
+impl Drop for PreparePermit {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.runtime.finish_prepare();
+        self.active = false;
     }
 }
 
