@@ -231,28 +231,19 @@ enum OutputKind {
 
 struct FastNoiseKernelFactory;
 
-struct InitGrid2dKernel;
-struct InitGrid3dKernel;
+struct GridInitKernel {
+    dimension: GraphDimension,
+}
 
-struct Warp2dKernel {
+struct WarpKernel {
+    dimension: GraphDimension,
     source: PositionSlots,
     output: PositionSlots,
     noise: FastNoiseLite,
 }
 
-struct Warp3dKernel {
-    source: PositionSlots,
-    output: PositionSlots,
-    noise: FastNoiseLite,
-}
-
-struct Sample2dKernel {
-    source: PositionSlots,
-    output: BufferSlot,
-    noise: FastNoiseLite,
-}
-
-struct Sample3dKernel {
+struct SampleKernel {
+    dimension: GraphDimension,
     source: PositionSlots,
     output: BufferSlot,
     noise: FastNoiseLite,
@@ -266,28 +257,16 @@ struct CombineKernel {
 }
 
 #[derive(Clone)]
-struct Warp2dPayload {
+struct WarpPayload {
+    dimension: GraphDimension,
     source: PositionSlots,
     output: PositionSlots,
     noise: FastNoiseLite,
 }
 
 #[derive(Clone)]
-struct Warp3dPayload {
-    source: PositionSlots,
-    output: PositionSlots,
-    noise: FastNoiseLite,
-}
-
-#[derive(Clone)]
-struct Sample2dPayload {
-    source: PositionSlots,
-    output: BufferSlot,
-    noise: FastNoiseLite,
-}
-
-#[derive(Clone)]
-struct Sample3dPayload {
+struct SamplePayload {
+    dimension: GraphDimension,
     source: PositionSlots,
     output: BufferSlot,
     noise: FastNoiseLite,
@@ -302,29 +281,29 @@ struct CombinePayload {
 }
 
 trait KernelPayload: Sized {
-    const KIND: FastNoiseKernel;
-
+    fn kind(&self) -> FastNoiseKernel;
     fn encode_into(&self, writer: &mut PayloadWriter<'_>) -> BraidResult<()>;
-    fn decode_from(reader: &mut PayloadReader<'_>) -> BraidResult<Self>;
+    fn decode_from(kind: FastNoiseKernel, reader: &mut PayloadReader<'_>) -> BraidResult<Self>;
 
     fn encode(&self, scratch: &mut PlannerScratch) -> BraidResult<KernelSpec> {
         scratch.reset();
         let mut writer = PayloadWriter::new(&mut scratch.bytes);
         self.encode_into(&mut writer)?;
-        Ok(KernelSpec::new(Self::KIND.into(), scratch.bytes.clone()))
+        Ok(KernelSpec::new(self.kind().into(), scratch.bytes.clone()))
     }
 
-    fn decode(bytes: &[u8]) -> BraidResult<Self> {
+    fn decode(kind: FastNoiseKernel, bytes: &[u8]) -> BraidResult<Self> {
         let mut reader = PayloadReader::new(bytes);
-        let payload = Self::decode_from(&mut reader)?;
+        let payload = Self::decode_from(kind, &mut reader)?;
         reader.finish()?;
         Ok(payload)
     }
 }
 
-impl Warp2dPayload {
-    fn into_kernel(self) -> Warp2dKernel {
-        Warp2dKernel {
+impl WarpPayload {
+    fn into_kernel(self) -> WarpKernel {
+        WarpKernel {
+            dimension: self.dimension,
             source: self.source,
             output: self.output,
             noise: self.noise,
@@ -332,38 +311,66 @@ impl Warp2dPayload {
     }
 }
 
-impl KernelPayload for Warp2dPayload {
-    const KIND: FastNoiseKernel = FastNoiseKernel::Warp2d;
+impl KernelPayload for WarpPayload {
+    fn kind(&self) -> FastNoiseKernel {
+        match self.dimension {
+            GraphDimension::D2 => FastNoiseKernel::Warp2d,
+            GraphDimension::D3 => FastNoiseKernel::Warp3d,
+        }
+    }
 
     fn encode_into(&self, writer: &mut PayloadWriter<'_>) -> BraidResult<()> {
         writer.slot(self.source.x);
         writer.slot(self.source.y);
+        if self.dimension == GraphDimension::D3 {
+            writer.slot(expect_slot(self.source.z, "warp payload source z")?);
+        }
         writer.slot(self.output.x);
         writer.slot(self.output.y);
+        if self.dimension == GraphDimension::D3 {
+            writer.slot(expect_slot(self.output.z, "warp payload output z")?);
+        }
         writer.noise(&self.noise);
         Ok(())
     }
 
-    fn decode_from(reader: &mut PayloadReader<'_>) -> BraidResult<Self> {
+    fn decode_from(kind: FastNoiseKernel, reader: &mut PayloadReader<'_>) -> BraidResult<Self> {
+        let dimension = match kind {
+            FastNoiseKernel::Warp2d => GraphDimension::D2,
+            FastNoiseKernel::Warp3d => GraphDimension::D3,
+            _ => {
+                return Err(BraidError::InvalidSpec(
+                    "warp payload received wrong kernel kind".to_owned(),
+                ))
+            }
+        };
         Ok(Self {
+            dimension,
             source: PositionSlots {
                 x: reader.slot()?,
                 y: reader.slot()?,
-                z: None,
+                z: match dimension {
+                    GraphDimension::D2 => None,
+                    GraphDimension::D3 => Some(reader.slot()?),
+                },
             },
             output: PositionSlots {
                 x: reader.slot()?,
                 y: reader.slot()?,
-                z: None,
+                z: match dimension {
+                    GraphDimension::D2 => None,
+                    GraphDimension::D3 => Some(reader.slot()?),
+                },
             },
             noise: reader.noise()?,
         })
     }
 }
 
-impl Warp3dPayload {
-    fn into_kernel(self) -> Warp3dKernel {
-        Warp3dKernel {
+impl SamplePayload {
+    fn into_kernel(self) -> SampleKernel {
+        SampleKernel {
+            dimension: self.dimension,
             source: self.source,
             output: self.output,
             noise: self.noise,
@@ -371,99 +378,44 @@ impl Warp3dPayload {
     }
 }
 
-impl KernelPayload for Warp3dPayload {
-    const KIND: FastNoiseKernel = FastNoiseKernel::Warp3d;
-
-    fn encode_into(&self, writer: &mut PayloadWriter<'_>) -> BraidResult<()> {
-        writer.slot(self.source.x);
-        writer.slot(self.source.y);
-        writer.slot(expect_slot(self.source.z, "warp3d payload source z")?);
-        writer.slot(self.output.x);
-        writer.slot(self.output.y);
-        writer.slot(expect_slot(self.output.z, "warp3d payload output z")?);
-        writer.noise(&self.noise);
-        Ok(())
-    }
-
-    fn decode_from(reader: &mut PayloadReader<'_>) -> BraidResult<Self> {
-        Ok(Self {
-            source: PositionSlots {
-                x: reader.slot()?,
-                y: reader.slot()?,
-                z: Some(reader.slot()?),
-            },
-            output: PositionSlots {
-                x: reader.slot()?,
-                y: reader.slot()?,
-                z: Some(reader.slot()?),
-            },
-            noise: reader.noise()?,
-        })
-    }
-}
-
-impl Sample2dPayload {
-    fn into_kernel(self) -> Sample2dKernel {
-        Sample2dKernel {
-            source: self.source,
-            output: self.output,
-            noise: self.noise,
+impl KernelPayload for SamplePayload {
+    fn kind(&self) -> FastNoiseKernel {
+        match self.dimension {
+            GraphDimension::D2 => FastNoiseKernel::Sample2d,
+            GraphDimension::D3 => FastNoiseKernel::Sample3d,
         }
     }
-}
-
-impl KernelPayload for Sample2dPayload {
-    const KIND: FastNoiseKernel = FastNoiseKernel::Sample2d;
 
     fn encode_into(&self, writer: &mut PayloadWriter<'_>) -> BraidResult<()> {
         writer.slot(self.source.x);
         writer.slot(self.source.y);
+        if self.dimension == GraphDimension::D3 {
+            writer.slot(expect_slot(self.source.z, "sample payload source z")?);
+        }
         writer.slot(self.output);
         writer.noise(&self.noise);
         Ok(())
     }
 
-    fn decode_from(reader: &mut PayloadReader<'_>) -> BraidResult<Self> {
+    fn decode_from(kind: FastNoiseKernel, reader: &mut PayloadReader<'_>) -> BraidResult<Self> {
+        let dimension = match kind {
+            FastNoiseKernel::Sample2d => GraphDimension::D2,
+            FastNoiseKernel::Sample3d => GraphDimension::D3,
+            _ => {
+                return Err(BraidError::InvalidSpec(
+                    "sample payload received wrong kernel kind".to_owned(),
+                ))
+            }
+        };
         Ok(Self {
+            dimension,
             source: PositionSlots {
                 x: reader.slot()?,
                 y: reader.slot()?,
-                z: None,
-            },
-            output: reader.slot()?,
-            noise: reader.noise()?,
-        })
-    }
-}
-
-impl Sample3dPayload {
-    fn into_kernel(self) -> Sample3dKernel {
-        Sample3dKernel {
-            source: self.source,
-            output: self.output,
-            noise: self.noise,
-        }
-    }
-}
-
-impl KernelPayload for Sample3dPayload {
-    const KIND: FastNoiseKernel = FastNoiseKernel::Sample3d;
-
-    fn encode_into(&self, writer: &mut PayloadWriter<'_>) -> BraidResult<()> {
-        writer.slot(self.source.x);
-        writer.slot(self.source.y);
-        writer.slot(expect_slot(self.source.z, "sample3d payload source z")?);
-        writer.slot(self.output);
-        writer.noise(&self.noise);
-        Ok(())
-    }
-
-    fn decode_from(reader: &mut PayloadReader<'_>) -> BraidResult<Self> {
-        Ok(Self {
-            source: PositionSlots {
-                x: reader.slot()?,
-                y: reader.slot()?,
-                z: Some(reader.slot()?),
+                z: match dimension {
+                    GraphDimension::D2 => None,
+                    GraphDimension::D3 => Some(reader.slot()?),
+                },
             },
             output: reader.slot()?,
             noise: reader.noise()?,
@@ -483,7 +435,9 @@ impl CombinePayload {
 }
 
 impl KernelPayload for CombinePayload {
-    const KIND: FastNoiseKernel = FastNoiseKernel::Combine;
+    fn kind(&self) -> FastNoiseKernel {
+        FastNoiseKernel::Combine
+    }
 
     fn encode_into(&self, writer: &mut PayloadWriter<'_>) -> BraidResult<()> {
         writer.u32(encode_combine_op(self.op));
@@ -499,7 +453,12 @@ impl KernelPayload for CombinePayload {
         Ok(())
     }
 
-    fn decode_from(reader: &mut PayloadReader<'_>) -> BraidResult<Self> {
+    fn decode_from(kind: FastNoiseKernel, reader: &mut PayloadReader<'_>) -> BraidResult<Self> {
+        if kind != FastNoiseKernel::Combine {
+            return Err(BraidError::InvalidSpec(
+                "combine payload received wrong kernel kind".to_owned(),
+            ));
+        }
         let op = decode_combine_op(reader.u32()?)?;
         let input_count = usize::try_from(reader.u32()?)
             .map_err(|_| BraidError::InvalidSpec("combine input count overflow".to_owned()))?;
@@ -774,28 +733,32 @@ impl CpuKernelFactory for FastNoiseKernelFactory {
         let kind = FastNoiseKernel::try_from(kernel.kind_id)
             .map_err(|_| BraidError::BackendRejectedKernel(kernel.kind_id))?;
         match kind {
-            FastNoiseKernel::InitGrid2d => Ok(Box::new(InitGrid2dKernel)),
-            FastNoiseKernel::InitGrid3d => Ok(Box::new(InitGrid3dKernel)),
+            FastNoiseKernel::InitGrid2d => Ok(Box::new(GridInitKernel {
+                dimension: GraphDimension::D2,
+            })),
+            FastNoiseKernel::InitGrid3d => Ok(Box::new(GridInitKernel {
+                dimension: GraphDimension::D3,
+            })),
             FastNoiseKernel::Warp2d => Ok(Box::new(
-                Warp2dPayload::decode(&kernel.payload)?.into_kernel(),
+                WarpPayload::decode(kind, &kernel.payload)?.into_kernel(),
             )),
             FastNoiseKernel::Warp3d => Ok(Box::new(
-                Warp3dPayload::decode(&kernel.payload)?.into_kernel(),
+                WarpPayload::decode(kind, &kernel.payload)?.into_kernel(),
             )),
             FastNoiseKernel::Sample2d => Ok(Box::new(
-                Sample2dPayload::decode(&kernel.payload)?.into_kernel(),
+                SamplePayload::decode(kind, &kernel.payload)?.into_kernel(),
             )),
             FastNoiseKernel::Sample3d => Ok(Box::new(
-                Sample3dPayload::decode(&kernel.payload)?.into_kernel(),
+                SamplePayload::decode(kind, &kernel.payload)?.into_kernel(),
             )),
             FastNoiseKernel::Combine => Ok(Box::new(
-                CombinePayload::decode(&kernel.payload)?.into_kernel(),
+                CombinePayload::decode(kind, &kernel.payload)?.into_kernel(),
             )),
         }
     }
 }
 
-impl CpuKernel for InitGrid2dKernel {
+impl CpuKernel for GridInitKernel {
     fn run(&self, packet: &mut JobPacket, cancel: &CancelFlag) -> BraidResult<()> {
         let meta = packet.u32(SLOT_QUERY_META)?.to_vec();
         let floats = packet.f32(SLOT_QUERY_F32)?.to_vec();
@@ -804,6 +767,51 @@ impl CpuKernel for InitGrid2dKernel {
         let query_count = packet.query_count();
         packet.ensure_f32(SLOT_BASE_X, total);
         packet.ensure_f32(SLOT_BASE_Y, total);
+        if self.dimension == GraphDimension::D3 {
+            packet.ensure_f32(SLOT_BASE_Z, total);
+            return packet.with_f32_buffers(&[SLOT_BASE_X, SLOT_BASE_Y, SLOT_BASE_Z], |buffers| {
+                let [xs, ys, zs]: [&mut [f32]; 3] = buffers
+                    .try_into()
+                    .map_err(|_| BraidError::from("init grid3d buffer view mismatch"))?;
+                for (query_index, offset_value) in offsets.iter().take(query_count).copied().enumerate()
+                {
+                    let meta_base = query_index * 3;
+                    let float_base = query_index * 6;
+                    let width = usize::try_from(meta[meta_base]).map_err(|_| {
+                        BraidError::InvalidSpec("grid3d width overflow".to_owned())
+                    })?;
+                    let height = usize::try_from(meta[meta_base + 1]).map_err(|_| {
+                        BraidError::InvalidSpec("grid3d height overflow".to_owned())
+                    })?;
+                    let depth = usize::try_from(meta[meta_base + 2]).map_err(|_| {
+                        BraidError::InvalidSpec("grid3d depth overflow".to_owned())
+                    })?;
+                    let offset = usize::try_from(offset_value).map_err(|_| {
+                        BraidError::InvalidSpec("grid3d offset overflow".to_owned())
+                    })?;
+                    let origin_x = floats[float_base];
+                    let origin_y = floats[float_base + 1];
+                    let origin_z = floats[float_base + 2];
+                    let step_x = floats[float_base + 3];
+                    let step_y = floats[float_base + 4];
+                    let step_z = floats[float_base + 5];
+                    for z in 0..depth {
+                        for y in 0..height {
+                            for x in 0..width {
+                                let index = offset + ((z * height + y) * width) + x;
+                                xs[index] = origin_x + (x as f32 * step_x);
+                                ys[index] = origin_y + (y as f32 * step_y);
+                                zs[index] = origin_z + (z as f32 * step_z);
+                            }
+                            if y & 15 == 0 && cancel.is_cancelled() {
+                                return Err(BraidError::Cancelled);
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            });
+        }
         packet.with_f32_buffers(&[SLOT_BASE_X, SLOT_BASE_Y], |buffers| {
             let [xs, ys]: [&mut [f32]; 2] = buffers
                 .try_into()
@@ -838,62 +846,42 @@ impl CpuKernel for InitGrid2dKernel {
     }
 }
 
-impl CpuKernel for InitGrid3dKernel {
-    fn run(&self, packet: &mut JobPacket, cancel: &CancelFlag) -> BraidResult<()> {
-        let meta = packet.u32(SLOT_QUERY_META)?.to_vec();
-        let floats = packet.f32(SLOT_QUERY_F32)?.to_vec();
-        let offsets = packet.u32(SLOT_QUERY_OFFSETS)?.to_vec();
-        let total = total_samples_from_offsets(offsets.as_slice())?;
-        let query_count = packet.query_count();
-        packet.ensure_f32(SLOT_BASE_X, total);
-        packet.ensure_f32(SLOT_BASE_Y, total);
-        packet.ensure_f32(SLOT_BASE_Z, total);
-        packet.with_f32_buffers(&[SLOT_BASE_X, SLOT_BASE_Y, SLOT_BASE_Z], |buffers| {
-            let [xs, ys, zs]: [&mut [f32]; 3] = buffers
-                .try_into()
-                .map_err(|_| BraidError::from("init grid3d buffer view mismatch"))?;
-            for (query_index, offset_value) in offsets.iter().take(query_count).copied().enumerate()
-            {
-                let meta_base = query_index * 3;
-                let float_base = query_index * 6;
-                let width = usize::try_from(meta[meta_base])
-                    .map_err(|_| BraidError::InvalidSpec("grid3d width overflow".to_owned()))?;
-                let height = usize::try_from(meta[meta_base + 1])
-                    .map_err(|_| BraidError::InvalidSpec("grid3d height overflow".to_owned()))?;
-                let depth = usize::try_from(meta[meta_base + 2])
-                    .map_err(|_| BraidError::InvalidSpec("grid3d depth overflow".to_owned()))?;
-                let offset = usize::try_from(offset_value)
-                    .map_err(|_| BraidError::InvalidSpec("grid3d offset overflow".to_owned()))?;
-                let origin_x = floats[float_base];
-                let origin_y = floats[float_base + 1];
-                let origin_z = floats[float_base + 2];
-                let step_x = floats[float_base + 3];
-                let step_y = floats[float_base + 4];
-                let step_z = floats[float_base + 5];
-                for z in 0..depth {
-                    for y in 0..height {
-                        for x in 0..width {
-                            let index = offset + ((z * height + y) * width) + x;
-                            xs[index] = origin_x + (x as f32 * step_x);
-                            ys[index] = origin_y + (y as f32 * step_y);
-                            zs[index] = origin_z + (z as f32 * step_z);
-                        }
-                        if y & 15 == 0 && cancel.is_cancelled() {
-                            return Err(BraidError::Cancelled);
-                        }
-                    }
-                }
-            }
-            Ok(())
-        })
-    }
-}
-
-impl CpuKernel for Warp2dKernel {
+impl CpuKernel for WarpKernel {
     fn run(&self, packet: &mut JobPacket, cancel: &CancelFlag) -> BraidResult<()> {
         let total = total_samples_from_offsets(packet.u32(SLOT_QUERY_OFFSETS)?)?;
         packet.ensure_f32(self.output.x, total);
         packet.ensure_f32(self.output.y, total);
+        if self.dimension == GraphDimension::D3 {
+            let source_z = expect_slot(self.source.z, "warp source z")?;
+            let output_z = expect_slot(self.output.z, "warp output z")?;
+            packet.ensure_f32(output_z, total);
+            return packet.with_f32_buffers(
+                &[
+                    self.source.x,
+                    self.source.y,
+                    source_z,
+                    self.output.x,
+                    self.output.y,
+                    output_z,
+                ],
+                |buffers| {
+                    let [xs, ys, zs, out_xs, out_ys, out_zs]: [&mut [f32]; 6] = buffers
+                        .try_into()
+                        .map_err(|_| BraidError::from("warp3d buffer view mismatch"))?;
+                    for index in 0..out_xs.len() {
+                        let (warp_x, warp_y, warp_z) =
+                            self.noise.domain_warp_3d(xs[index], ys[index], zs[index]);
+                        out_xs[index] = warp_x;
+                        out_ys[index] = warp_y;
+                        out_zs[index] = warp_z;
+                        if index & 2047 == 0 && cancel.is_cancelled() {
+                            return Err(BraidError::Cancelled);
+                        }
+                    }
+                    Ok(())
+                },
+            );
+        }
         packet.with_f32_buffers(
             &[self.source.x, self.source.y, self.output.x, self.output.y],
             |buffers| {
@@ -914,47 +902,28 @@ impl CpuKernel for Warp2dKernel {
     }
 }
 
-impl CpuKernel for Warp3dKernel {
-    fn run(&self, packet: &mut JobPacket, cancel: &CancelFlag) -> BraidResult<()> {
-        let total = total_samples_from_offsets(packet.u32(SLOT_QUERY_OFFSETS)?)?;
-        let source_z = expect_slot(self.source.z, "warp3d source z")?;
-        let output_z = expect_slot(self.output.z, "warp3d output z")?;
-        packet.ensure_f32(self.output.x, total);
-        packet.ensure_f32(self.output.y, total);
-        packet.ensure_f32(output_z, total);
-        packet.with_f32_buffers(
-            &[
-                self.source.x,
-                self.source.y,
-                source_z,
-                self.output.x,
-                self.output.y,
-                output_z,
-            ],
-            |buffers| {
-                let [xs, ys, zs, out_xs, out_ys, out_zs]: [&mut [f32]; 6] = buffers
-                    .try_into()
-                    .map_err(|_| BraidError::from("warp3d buffer view mismatch"))?;
-                for index in 0..out_xs.len() {
-                    let (warp_x, warp_y, warp_z) =
-                        self.noise.domain_warp_3d(xs[index], ys[index], zs[index]);
-                    out_xs[index] = warp_x;
-                    out_ys[index] = warp_y;
-                    out_zs[index] = warp_z;
-                    if index & 2047 == 0 && cancel.is_cancelled() {
-                        return Err(BraidError::Cancelled);
-                    }
-                }
-                Ok(())
-            },
-        )
-    }
-}
-
-impl CpuKernel for Sample2dKernel {
+impl CpuKernel for SampleKernel {
     fn run(&self, packet: &mut JobPacket, cancel: &CancelFlag) -> BraidResult<()> {
         let total = total_samples_from_offsets(packet.u32(SLOT_QUERY_OFFSETS)?)?;
         packet.ensure_f32(self.output, total);
+        if self.dimension == GraphDimension::D3 {
+            let source_z = expect_slot(self.source.z, "sample source z")?;
+            return packet.with_f32_buffers(
+                &[self.source.x, self.source.y, source_z, self.output],
+                |buffers| {
+                    let [xs, ys, zs, out]: [&mut [f32]; 4] = buffers
+                        .try_into()
+                        .map_err(|_| BraidError::from("sample3d buffer view mismatch"))?;
+                    for index in 0..out.len() {
+                        out[index] = self.noise.get_noise_3d(xs[index], ys[index], zs[index]);
+                        if index & 2047 == 0 && cancel.is_cancelled() {
+                            return Err(BraidError::Cancelled);
+                        }
+                    }
+                    Ok(())
+                },
+            );
+        }
         packet.with_f32_buffers(&[self.source.x, self.source.y, self.output], |buffers| {
             let [xs, ys, out]: [&mut [f32]; 3] = buffers
                 .try_into()
@@ -967,29 +936,6 @@ impl CpuKernel for Sample2dKernel {
             }
             Ok(())
         })
-    }
-}
-
-impl CpuKernel for Sample3dKernel {
-    fn run(&self, packet: &mut JobPacket, cancel: &CancelFlag) -> BraidResult<()> {
-        let total = total_samples_from_offsets(packet.u32(SLOT_QUERY_OFFSETS)?)?;
-        let source_z = expect_slot(self.source.z, "sample3d source z")?;
-        packet.ensure_f32(self.output, total);
-        packet.with_f32_buffers(
-            &[self.source.x, self.source.y, source_z, self.output],
-            |buffers| {
-                let [xs, ys, zs, out]: [&mut [f32]; 4] = buffers
-                    .try_into()
-                    .map_err(|_| BraidError::from("sample3d buffer view mismatch"))?;
-                for index in 0..out.len() {
-                    out[index] = self.noise.get_noise_3d(xs[index], ys[index], zs[index]);
-                    if index & 2047 == 0 && cancel.is_cancelled() {
-                        return Err(BraidError::Cancelled);
-                    }
-                }
-                Ok(())
-            },
-        )
     }
 }
 
@@ -1269,7 +1215,8 @@ fn compile_graph(
                 )?;
                 let output =
                     expect_position_slots(position_slots.as_slice(), handle, "warp2d output slot")?;
-                Warp2dPayload {
+                WarpPayload {
+                    dimension: GraphDimension::D2,
                     source,
                     output,
                     noise: node.noise.clone(),
@@ -1285,7 +1232,8 @@ fn compile_graph(
                 )?;
                 let output =
                     expect_position_slots(position_slots.as_slice(), handle, "warp3d output slot")?;
-                Warp3dPayload {
+                WarpPayload {
+                    dimension: GraphDimension::D3,
                     source,
                     output,
                     noise: node.noise.clone(),
@@ -1301,7 +1249,8 @@ fn compile_graph(
                 )?;
                 let output =
                     expect_scalar_slot(scalar_slots.as_slice(), handle, "sample2d output slot")?;
-                Sample2dPayload {
+                SamplePayload {
+                    dimension: GraphDimension::D2,
                     source,
                     output,
                     noise: node.noise.clone(),
@@ -1317,7 +1266,8 @@ fn compile_graph(
                 )?;
                 let output =
                     expect_scalar_slot(scalar_slots.as_slice(), handle, "sample3d output slot")?;
-                Sample3dPayload {
+                SamplePayload {
+                    dimension: GraphDimension::D3,
                     source,
                     output,
                     noise: node.noise.clone(),
@@ -2274,7 +2224,7 @@ mod tests {
     use super::{
         ChunkQuery, CombineNode, CombineOp, FastNoiseChange, FastNoiseGraphSpec, FastNoiseLite,
         FastNoisePlanner, FractalType, GraphDimension, KernelPayload, NodeSpec, NoiseType,
-        PositionSlots, PositionSource, Sample2DNode, Sample3DNode, Sample3dPayload, Warp2DNode,
+        PositionSlots, PositionSource, Sample2DNode, Sample3DNode, SamplePayload, Warp2DNode,
         scenarios, summarize_samples,
     };
     use braid::{BackendConfig, BraidExecutor, BufferSlot, PlannerBackend, Stack};
@@ -2482,7 +2432,8 @@ mod tests {
         noise.set_fractal_lacunarity(Some(2.5));
         noise.set_fractal_gain(Some(0.45));
 
-        let payload = Sample3dPayload {
+        let payload = SamplePayload {
+            dimension: GraphDimension::D3,
             source: PositionSlots {
                 x: BufferSlot::new(41),
                 y: BufferSlot::new(42),
@@ -2494,8 +2445,10 @@ mod tests {
 
         let mut scratch = braid::PlannerScratch::default();
         let kernel = payload.encode(&mut scratch).expect("encode");
-        let decoded = Sample3dPayload::decode(&kernel.payload).expect("decode");
+        let decoded = SamplePayload::decode(super::FastNoiseKernel::Sample3d, &kernel.payload)
+            .expect("decode");
 
+        assert_eq!(decoded.dimension, payload.dimension);
         assert_eq!(decoded.source.x, payload.source.x);
         assert_eq!(decoded.source.y, payload.source.y);
         assert_eq!(decoded.source.z, payload.source.z);
