@@ -86,6 +86,14 @@ impl BufferData {
             Self::F32(vals) => vals.clear(),
         }
     }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::U32(vals) => vals.len(),
+            Self::U64(vals) => vals.len(),
+            Self::F32(vals) => vals.len(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

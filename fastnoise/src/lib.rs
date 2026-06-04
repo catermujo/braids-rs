@@ -168,6 +168,7 @@ pub struct FastNoisePlannerMeta {
     final_slot: u16,
 }
 
+#[derive(Clone)]
 pub struct FastNoiseState {
     dimension: GraphDimension,
     final_field: String,

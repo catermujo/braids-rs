@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 
 pub type BraidResult<T> = Result<T, BraidError>;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum BraidError {
     Cancelled,
     UnknownJob,

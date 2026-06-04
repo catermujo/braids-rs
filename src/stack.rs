@@ -3,7 +3,7 @@ use crate::compute::ComputeBackend;
 use crate::error::{BraidError, BraidResult};
 use crate::executor::{BackendHandle, BraidExecutor};
 use crate::job::{CancelFlag, JobPacket, JobStatus};
-use crate::pipeline::{JobId, VersionId};
+use crate::pipeline::{BufferLayout, BufferSpec, CompiledPlan, JobId, VersionId};
 use crate::planner::PlannerBackend;
 use crate::scratch::{BatchScratch, ComputeScratch, PlannerScratch};
 use crate::version::FrozenStackVersion;
@@ -117,6 +117,7 @@ where
         let prepared_pool = Arc::new(Mutex::new(Vec::new()));
         let mut planner_scratch = PlannerScratch::default();
         let compiled = planner.compile(&state, &mut planner_scratch)?;
+        validate_compiled_plan(&compiled)?;
 
         let mut compute_scratch = ComputeScratch::default();
         let prepared = backend.prepare_blocking(&compiled, None, &mut compute_scratch)?;
@@ -179,8 +180,16 @@ where
             .state
             .lock()
             .map_err(|_| BraidError::poisoned("stack.state"))?;
+        let snapshot = state.clone();
         self.inner.planner.apply(&mut state, &changes)?;
-        self.inner.compile_from_state(&state)
+        let version_id = match self.inner.compile_from_state(&state) {
+            Ok(version_id) => version_id,
+            Err(error) => {
+                *state = snapshot;
+                return Err(error);
+            }
+        };
+        Ok(version_id)
     }
 
     pub fn dispatch(&self, queries: Vec<P::Query>) -> BraidResult<JobId> {
@@ -309,6 +318,7 @@ where
             .map_err(|_| BraidError::poisoned("stack.planner_scratch"))?;
         planner_scratch.reset();
         let compiled = self.planner.compile(state, &mut planner_scratch)?;
+        validate_compiled_plan(&compiled)?;
         drop(planner_scratch);
 
         let mut compute_scratch = self
@@ -400,10 +410,12 @@ where
     }
 
     fn schedule_stage(self: &Arc<Self>, stage_index: usize) -> BraidResult<()> {
-        let job = Arc::clone(self);
-        self.inner
-            .backend
-            .schedule(move || job.run_stage_task(stage_index))
+        let run_job = Arc::clone(self);
+        let reject_job = Arc::clone(self);
+        self.inner.backend.schedule_with_rejection(
+            move || run_job.run_stage_task(stage_index),
+            move |error| reject_job.reject_scheduled_task(error),
+        )
     }
 
     fn schedule_decode(self: &Arc<Self>) -> BraidResult<()> {
@@ -456,6 +468,9 @@ where
 
         let mut packet = self.inner.packet_pool.checkout("stack.packet_pool")?;
         packet.clear_for_reuse();
+        for buffer in &self.version.compiled.static_buffers {
+            packet.load_static_buffer(buffer.slot, &buffer.data);
+        }
         let mut batch_scratch = self
             .inner
             .batch_scratch_pool
@@ -481,6 +496,7 @@ where
                 .give_back("stack.packet_pool", packet)?;
             return Err(error);
         }
+        validate_packet_against_plan(&self.version.compiled, &packet)?;
 
         self.store_packet(packet)?;
         if self.version.compiled.pipeline.stages.is_empty() {
@@ -522,6 +538,7 @@ where
                 packet,
                 &self.record.cancel,
             )?;
+            validate_packet_against_plan(&self.version.compiled, packet)?;
         }
 
         let next_stage = stage_index + 1;
@@ -538,6 +555,7 @@ where
         }
 
         let mut packet = self.take_packet()?;
+        validate_packet_against_plan(&self.version.compiled, &packet)?;
         let decoded = self
             .inner
             .planner
@@ -588,4 +606,110 @@ where
             .packet_pool
             .give_back("stack.packet_pool", packet);
     }
+
+    fn reject_scheduled_task(self: Arc<Self>, error: BraidError) {
+        self.cleanup_packet();
+        let _ = self.inner.finish_failed(&self.record, error);
+    }
+}
+
+fn validate_compiled_plan<M>(plan: &CompiledPlan<M>) -> BraidResult<()> {
+    let mut specs = HashMap::with_capacity(plan.pipeline.buffers.len());
+    for spec in &plan.pipeline.buffers {
+        if specs.insert(spec.slot, spec).is_some() {
+            return Err(BraidError::InvalidSpec(format!(
+                "duplicate buffer slot {} in pipeline",
+                spec.slot
+            )));
+        }
+    }
+
+    let mut static_slots = HashMap::with_capacity(plan.static_buffers.len());
+    for buffer in &plan.static_buffers {
+        if static_slots.insert(buffer.slot, ()).is_some() {
+            return Err(BraidError::InvalidSpec(format!(
+                "duplicate static buffer slot {}",
+                buffer.slot
+            )));
+        }
+        let Some(spec) = specs.get(&buffer.slot) else {
+            return Err(BraidError::InvalidSpec(format!(
+                "static buffer slot {} is not declared in pipeline",
+                buffer.slot
+            )));
+        };
+        if spec.element_kind != buffer.data.kind() {
+            return Err(BraidError::InvalidSpec(format!(
+                "static buffer slot {} has wrong element kind",
+                buffer.slot
+            )));
+        }
+    }
+
+    for (stage_index, stage) in plan.pipeline.stages.iter().enumerate() {
+        for (kernel_index, kernel) in stage.kernels.iter().enumerate() {
+            for binding in &kernel.bindings {
+                if !specs.contains_key(&binding.slot) {
+                    return Err(BraidError::InvalidSpec(format!(
+                        "stage {} kernel {} references undeclared buffer slot {}",
+                        stage_index, kernel_index, binding.slot
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_packet_against_plan<M>(plan: &CompiledPlan<M>, packet: &JobPacket) -> BraidResult<()> {
+    let mut specs = HashMap::with_capacity(plan.pipeline.buffers.len());
+    for spec in &plan.pipeline.buffers {
+        specs.insert(spec.slot, spec);
+    }
+
+    for (slot, kind, len) in packet.buffer_descriptors() {
+        let Some(spec) = specs.get(&slot) else {
+            if len == 0 {
+                continue;
+            }
+            return Err(BraidError::InvalidSpec(format!(
+                "packet contains undeclared buffer slot {}",
+                slot
+            )));
+        };
+        if spec.element_kind != kind {
+            return Err(BraidError::InvalidBufferType {
+                slot,
+                expected: spec.element_kind,
+            });
+        }
+        validate_buffer_layout(spec, packet.query_count(), len)?;
+    }
+
+    Ok(())
+}
+
+fn validate_buffer_layout(spec: &BufferSpec, query_count: usize, len: usize) -> BraidResult<()> {
+    let expected_len = match spec.layout {
+        BufferLayout::PerQueryScalar => Some(query_count),
+        BufferLayout::PerQueryVector { width } => query_count.checked_mul(width),
+        BufferLayout::Dynamic => return Ok(()),
+    };
+
+    let Some(expected_len) = expected_len else {
+        return Err(BraidError::InvalidSpec(format!(
+            "buffer slot {} length overflow for declared layout",
+            spec.slot
+        )));
+    };
+
+    if len != expected_len {
+        return Err(BraidError::InvalidSpec(format!(
+            "buffer slot {} has length {} but declared layout expects {}",
+            spec.slot, len, expected_len
+        )));
+    }
+
+    Ok(())
 }

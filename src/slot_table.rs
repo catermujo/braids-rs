@@ -4,13 +4,13 @@ pub struct SlotKey {
     pub generation: u32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Slot<T> {
     generation: u32,
     value: Option<T>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SlotTable<T> {
     slots: Vec<Slot<T>>,
     free: Vec<usize>,

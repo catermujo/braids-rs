@@ -114,6 +114,28 @@ impl JobPacket {
         }
     }
 
+    pub(crate) fn load_static_buffer(&mut self, slot: u16, data: &BufferData) {
+        match data {
+            BufferData::U32(values) => {
+                self.ensure_u32(slot, values.len()).copy_from_slice(values);
+            }
+            BufferData::U64(values) => {
+                self.ensure_u64(slot, values.len()).copy_from_slice(values);
+            }
+            BufferData::F32(values) => {
+                self.ensure_f32(slot, values.len()).copy_from_slice(values);
+            }
+        }
+    }
+
+    pub(crate) fn buffer_descriptors(
+        &self,
+    ) -> impl Iterator<Item = (u16, ElementKind, usize)> + '_ {
+        self.buffers
+            .iter()
+            .map(|buffer| (buffer.slot, buffer.data.kind(), buffer.data.len()))
+    }
+
     pub fn u32(&self, slot: u16) -> BraidResult<&[u32]> {
         self.view(slot, ElementKind::U32)
             .and_then(|buffer| match buffer {

@@ -8,16 +8,47 @@ use std::thread::{self, JoinHandle};
 
 pub(crate) trait RunnableTask: Send {
     fn run(self: Box<Self>);
+    fn reject(self: Box<Self>, error: BraidError);
 }
 
-pub(crate) struct TaskFn<F: FnOnce() + Send + 'static> {
-    pub(crate) func: Option<F>,
+pub(crate) struct TaskFn {
+    pub(crate) func: Option<Box<dyn FnOnce() + Send>>,
+    pub(crate) reject: Option<Box<dyn FnOnce(BraidError) + Send>>,
 }
 
-impl<F: FnOnce() + Send + 'static> RunnableTask for TaskFn<F> {
+impl TaskFn {
+    fn new<F>(func: F) -> Self
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        Self {
+            func: Some(Box::new(func)),
+            reject: None,
+        }
+    }
+
+    fn with_rejection<F, R>(func: F, reject: R) -> Self
+    where
+        F: FnOnce() + Send + 'static,
+        R: FnOnce(BraidError) + Send + 'static,
+    {
+        Self {
+            func: Some(Box::new(func)),
+            reject: Some(Box::new(reject)),
+        }
+    }
+}
+
+impl RunnableTask for TaskFn {
     fn run(mut self: Box<Self>) {
         if let Some(func) = self.func.take() {
             func();
+        }
+    }
+
+    fn reject(mut self: Box<Self>, error: BraidError) {
+        if let Some(reject) = self.reject.take() {
+            reject(error);
         }
     }
 }
@@ -79,6 +110,13 @@ impl RunnableTask for BackendWrappedTask {
         }
         self.runtime.finish_lane();
     }
+
+    fn reject(mut self: Box<Self>, error: BraidError) {
+        if let Some(task) = self.inner.take() {
+            let _ = catch_unwind(AssertUnwindSafe(|| task.reject(error)));
+        }
+        self.runtime.finish_lane();
+    }
 }
 
 #[derive(Default)]
@@ -89,6 +127,7 @@ struct ExecutorInner {
 }
 
 pub struct BraidExecutor {
+    backends: Mutex<Vec<Weak<BackendRuntime>>>,
     inner: Arc<ExecutorInner>,
     workers: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -102,6 +141,7 @@ impl BraidExecutor {
             workers.push(thread::spawn(move || worker_loop(worker_inner)));
         }
         Self {
+            backends: Mutex::new(Vec::new()),
             inner,
             workers: Mutex::new(workers),
         }
@@ -123,26 +163,42 @@ impl BraidExecutor {
     where
         C: ComputeBackend,
     {
-        BackendHandle {
-            backend,
-            runtime: Arc::new(BackendRuntime {
-                executor: Arc::downgrade(&self.inner),
-                state: Mutex::new(BackendQueueState {
-                    lane_count: lane_count.max(1),
-                    prepare_lane_count: prepare_lane_count.max(1).min(lane_count.max(1)),
-                    lanes_in_use: 0,
-                    prepares_in_use: 0,
-                    waiting: VecDeque::new(),
-                }),
-                prepare_wake: Condvar::new(),
+        let runtime = Arc::new(BackendRuntime {
+            executor: Arc::downgrade(&self.inner),
+            state: Mutex::new(BackendQueueState {
+                lane_count: lane_count.max(1),
+                prepare_lane_count: prepare_lane_count.max(1).min(lane_count.max(1)),
+                lanes_in_use: 0,
+                prepares_in_use: 0,
+                waiting: VecDeque::new(),
             }),
+            prepare_wake: Condvar::new(),
+        });
+        if let Ok(mut backends) = self.backends.lock() {
+            backends.push(Arc::downgrade(&runtime));
         }
+        BackendHandle { backend, runtime }
     }
 
     pub fn shutdown(&self) {
         if self.inner.shutdown.swap(true, Ordering::AcqRel) {
             return;
         }
+
+        let runtimes = match self.backends.lock() {
+            Ok(mut backends) => {
+                backends.retain(|runtime| runtime.strong_count() > 0);
+                backends
+                    .iter()
+                    .filter_map(Weak::upgrade)
+                    .collect::<Vec<_>>()
+            }
+            Err(_) => Vec::new(),
+        };
+        for runtime in runtimes {
+            runtime.shutdown();
+        }
+
         self.inner.wake.notify_all();
         let current_id = thread::current().id();
 
@@ -162,8 +218,9 @@ impl BraidExecutor {
     {
         submit_boxed(
             &self.inner,
-            Box::new(TaskFn { func: Some(task) }) as Box<dyn RunnableTask>,
+            Box::new(TaskFn::new(task)) as Box<dyn RunnableTask>,
         )
+        .map_err(|(error, _)| error)
     }
 }
 
@@ -177,11 +234,13 @@ impl<C> BackendHandle<C>
 where
     C: ComputeBackend,
 {
-    pub(crate) fn schedule<F>(&self, task: F) -> BraidResult<()>
+    pub(crate) fn schedule_with_rejection<F, R>(&self, task: F, reject: R) -> BraidResult<()>
     where
         F: FnOnce() + Send + 'static,
+        R: FnOnce(BraidError) + Send + 'static,
     {
-        self.runtime.schedule(Box::new(TaskFn { func: Some(task) }))
+        self.runtime
+            .schedule(Box::new(TaskFn::with_rejection(task, reject)), true)
     }
 
     pub(crate) fn prepare_blocking<M: Send + Sync + 'static>(
@@ -196,7 +255,11 @@ where
 }
 
 impl BackendRuntime {
-    fn schedule(self: &Arc<Self>, task: Box<dyn RunnableTask>) -> BraidResult<()> {
+    fn schedule(
+        self: &Arc<Self>,
+        task: Box<dyn RunnableTask>,
+        reject_on_failure: bool,
+    ) -> BraidResult<()> {
         let ready = {
             let mut state = self
                 .state
@@ -212,7 +275,7 @@ impl BackendRuntime {
         };
 
         if let Some(task) = ready {
-            self.submit_ready(task)?;
+            self.submit_ready(task, reject_on_failure)?;
         }
         Ok(())
     }
@@ -264,10 +327,7 @@ impl BackendRuntime {
         };
 
         if let Some(task) = next {
-            if self.submit_ready(task).is_err() {
-                if let Ok(mut state) = self.state.lock() {
-                    state.lanes_in_use = state.lanes_in_use.saturating_sub(1);
-                }
+            if self.submit_ready(task, true).is_err() {
                 self.prepare_wake.notify_all();
             }
         } else {
@@ -292,34 +352,57 @@ impl BackendRuntime {
         };
 
         if let Some(task) = next
-            && self.submit_ready(task).is_err()
-            && let Ok(mut state) = self.state.lock()
+            && self.submit_ready(task, true).is_err()
         {
-            state.lanes_in_use = state.lanes_in_use.saturating_sub(1);
+            self.prepare_wake.notify_all();
         }
         self.prepare_wake.notify_all();
     }
 
-    fn submit_ready(self: &Arc<Self>, task: Box<dyn RunnableTask>) -> BraidResult<()> {
+    fn submit_ready(
+        self: &Arc<Self>,
+        task: Box<dyn RunnableTask>,
+        reject_on_failure: bool,
+    ) -> BraidResult<()> {
+        let wrapped = Box::new(BackendWrappedTask {
+            runtime: Arc::clone(self),
+            inner: Some(task),
+        }) as Box<dyn RunnableTask>;
+
         let Some(executor) = self.executor.upgrade() else {
-            if let Ok(mut state) = self.state.lock() {
+            if reject_on_failure {
+                wrapped.reject(BraidError::ExecutorShutdown);
+            } else if let Ok(mut state) = self.state.lock() {
                 state.lanes_in_use = state.lanes_in_use.saturating_sub(1);
             }
             return Err(BraidError::ExecutorShutdown);
         };
 
-        let wrapped = Box::new(BackendWrappedTask {
-            runtime: Arc::clone(self),
-            inner: Some(task),
-        }) as Box<dyn RunnableTask>;
-        if let Err(error) = submit_boxed(&executor, wrapped) {
-            if let Ok(mut state) = self.state.lock() {
+        if let Err((error, task)) = submit_boxed(&executor, wrapped) {
+            if reject_on_failure {
+                task.reject(error.clone());
+            } else if let Ok(mut state) = self.state.lock() {
                 state.lanes_in_use = state.lanes_in_use.saturating_sub(1);
             }
             return Err(error);
         }
 
         Ok(())
+    }
+
+    fn shutdown(&self) {
+        let waiting = {
+            let mut state = match self.state.lock() {
+                Ok(state) => state,
+                Err(_) => return,
+            };
+            state.waiting.drain(..).collect::<Vec<_>>()
+        };
+
+        for task in waiting {
+            task.reject(BraidError::ExecutorShutdown);
+        }
+        self.prepare_wake.notify_all();
     }
 }
 
@@ -338,15 +421,18 @@ impl Drop for PreparePermit {
     }
 }
 
-fn submit_boxed(inner: &Arc<ExecutorInner>, task: Box<dyn RunnableTask>) -> BraidResult<()> {
+fn submit_boxed(
+    inner: &Arc<ExecutorInner>,
+    task: Box<dyn RunnableTask>,
+) -> Result<(), (BraidError, Box<dyn RunnableTask>)> {
     if inner.shutdown.load(Ordering::Acquire) {
-        return Err(BraidError::ExecutorShutdown);
+        return Err((BraidError::ExecutorShutdown, task));
     }
 
-    let mut queue = inner
-        .queue
-        .lock()
-        .map_err(|_| BraidError::poisoned("executor.queue"))?;
+    let mut queue = match inner.queue.lock() {
+        Ok(queue) => queue,
+        Err(_) => return Err((BraidError::poisoned("executor.queue"), task)),
+    };
     queue.push_back(task);
     drop(queue);
     inner.wake.notify_one();
