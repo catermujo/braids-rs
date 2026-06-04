@@ -1,0 +1,15 @@
+[package]
+name = "braid"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = ["."]
+resolver = "3"
+
+[lib]
+path = "src/lib.rs"
+
+[[bench]]
+name = "core_stack_executor"
+harness = false
