@@ -119,6 +119,7 @@ pub struct BufferSpec {
 }
 
 impl BufferSpec {
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     fn validate_len(&self, query_count: usize, len: usize) -> BraidResult<()> {
         let expected_len = match self.layout {
             BufferLayout::PerQueryScalar => Some(query_count),
@@ -293,10 +294,10 @@ impl<M> CompiledPlan<M> {
         Ok(())
     }
 
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub(crate) fn validate_packet(&self, packet: &JobPacket) -> BraidResult<()> {
-        let specs = self.specs_by_slot()?;
         for (slot, kind, len) in packet.buffer_descriptors() {
-            let Some(spec) = specs.get(&slot) else {
+            let Some(spec) = self.pipeline.buffers.iter().find(|spec| spec.slot == slot) else {
                 if len == 0 {
                     continue;
                 }

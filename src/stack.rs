@@ -8,7 +8,7 @@ use crate::planner::PlannerBackend;
 use crate::scratch::{BatchScratch, ComputeScratch, PlannerScratch};
 use crate::version::FrozenStackVersion;
 use std::collections::HashMap;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
@@ -63,11 +63,28 @@ where
     planner_scratch: Mutex<PlannerScratch>,
     batch_scratch_pool: ReusablePool<BatchScratch>,
     packet_pool: ReusablePool<JobPacket>,
+    inline_context_pool: ReusablePool<InlineContext>,
     compute_scratch_pool: ReusablePool<ComputeScratch>,
     prepared_pool: Arc<Mutex<Vec<C::Prepared>>>,
     jobs: Mutex<HashMap<JobId, Arc<JobRecord<P::Resolution>>>>,
     next_job_id: AtomicU64,
     next_version_id: AtomicU64,
+}
+
+/// Reusable caller-owned scratch for low-latency inline execution.
+#[derive(Debug, Default)]
+pub struct InlineContext {
+    packet: JobPacket,
+    batch_scratch: BatchScratch,
+    cancel: CancelFlag,
+}
+
+impl InlineContext {
+    fn reset(&mut self) {
+        self.packet.clear_for_reuse();
+        self.batch_scratch.reset();
+        self.cancel.reset();
+    }
 }
 
 /// Typed runtime handle for one compiled planner/backend combination.
@@ -143,6 +160,7 @@ where
                 planner_scratch: Mutex::new(planner_scratch),
                 batch_scratch_pool: ReusablePool::default(),
                 packet_pool: ReusablePool::default(),
+                inline_context_pool: ReusablePool::default(),
                 compute_scratch_pool: ReusablePool::default(),
                 prepared_pool,
                 jobs: Mutex::new(HashMap::new()),
@@ -240,6 +258,192 @@ where
         Ok(job_id)
     }
 
+    /// Run one batch inline on the caller thread and return decoded planner results directly.
+    ///
+    /// This skips async job records, executor queue hops, and backend lane scheduling. It is the
+    /// right path for tiny serial workloads where queueing cost would dominate real compute.
+    pub fn resolve_inline(&self, queries: &[P::Query]) -> BraidResult<Vec<P::Resolution>> {
+        let mut context = self
+            .inner
+            .inline_context_pool
+            .checkout("stack.inline_context")?;
+        let result = self.resolve_inline_with(queries, &mut context);
+        context.reset();
+        self.inner
+            .inline_context_pool
+            .give_back("stack.inline_context", context)?;
+        result
+    }
+
+    /// Run one batch inline on the caller thread with caller-owned reusable scratch.
+    pub fn resolve_inline_with(
+        &self,
+        queries: &[P::Query],
+        context: &mut InlineContext,
+    ) -> BraidResult<Vec<P::Resolution>> {
+        let version = {
+            let version = self
+                .inner
+                .current_version
+                .read()
+                .map_err(|_| BraidError::poisoned("stack.current_version"))?;
+            Arc::clone(&version)
+        };
+        context.cancel.reset();
+        if P::PREFER_DIRECT_ONE_QUERY_INLINE {
+            if let [query] = queries {
+                #[cfg(debug_assertions)]
+                {
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        self.inner
+                            .execute_one_direct_inline(&version, query, context)
+                    }));
+                    return match result {
+                        Ok(result) => result.map(|value| vec![value]),
+                        Err(_) => Err(BraidError::from("inline execution panicked")),
+                    };
+                }
+
+                #[cfg(not(debug_assertions))]
+                {
+                    return self
+                        .inner
+                        .execute_one_direct_inline(&version, query, context)
+                        .map(|value| vec![value]);
+                }
+            }
+        }
+
+        if P::PREFER_ONE_QUERY_INLINE {
+            if let [query] = queries {
+                #[cfg(debug_assertions)]
+                {
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        self.inner.execute_one_inline(&version, query, context)
+                    }));
+                    return match result {
+                        Ok(result) => result.map(|value| vec![value]),
+                        Err(_) => Err(BraidError::from("inline execution panicked")),
+                    };
+                }
+
+                #[cfg(not(debug_assertions))]
+                {
+                    return self
+                        .inner
+                        .execute_one_inline(&version, query, context)
+                        .map(|value| vec![value]);
+                }
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                self.inner.execute_inline(&version, queries, context)
+            }));
+            match result {
+                Ok(result) => result,
+                Err(_) => Err(BraidError::from("inline execution panicked")),
+            }
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            self.inner.execute_inline(&version, queries, context)
+        }
+    }
+
+    /// Run one query inline on the caller thread and return one decoded resolution.
+    pub fn resolve_one_inline(&self, query: P::Query) -> BraidResult<P::Resolution> {
+        let mut context = self
+            .inner
+            .inline_context_pool
+            .checkout("stack.inline_context")?;
+        let result = self.resolve_one_inline_ref_with(&query, &mut context);
+        context.reset();
+        self.inner
+            .inline_context_pool
+            .give_back("stack.inline_context", context)?;
+        result
+    }
+
+    /// Run one query inline on the caller thread with caller-owned reusable scratch.
+    pub fn resolve_one_inline_with(
+        &self,
+        query: P::Query,
+        context: &mut InlineContext,
+    ) -> BraidResult<P::Resolution> {
+        self.resolve_one_inline_ref_with(&query, context)
+    }
+
+    /// Run one borrowed query inline on the caller thread and return one decoded resolution.
+    pub fn resolve_one_inline_ref(&self, query: &P::Query) -> BraidResult<P::Resolution> {
+        let mut context = self
+            .inner
+            .inline_context_pool
+            .checkout("stack.inline_context")?;
+        let result = self.resolve_one_inline_ref_with(query, &mut context);
+        context.reset();
+        self.inner
+            .inline_context_pool
+            .give_back("stack.inline_context", context)?;
+        result
+    }
+
+    /// Run one borrowed query inline on the caller thread with caller-owned reusable scratch.
+    pub fn resolve_one_inline_ref_with(
+        &self,
+        query: &P::Query,
+        context: &mut InlineContext,
+    ) -> BraidResult<P::Resolution> {
+        let version = {
+            let version = self
+                .inner
+                .current_version
+                .read()
+                .map_err(|_| BraidError::poisoned("stack.current_version"))?;
+            Arc::clone(&version)
+        };
+        context.cancel.reset();
+        if P::PREFER_DIRECT_ONE_QUERY_INLINE {
+            #[cfg(debug_assertions)]
+            {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    self.inner
+                        .execute_one_direct_inline(&version, query, context)
+                }));
+                return match result {
+                    Ok(result) => result,
+                    Err(_) => Err(BraidError::from("inline execution panicked")),
+                };
+            }
+
+            #[cfg(not(debug_assertions))]
+            {
+                return self
+                    .inner
+                    .execute_one_direct_inline(&version, query, context);
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                self.inner.execute_one_inline(&version, query, context)
+            }));
+            match result {
+                Ok(result) => result,
+                Err(_) => Err(BraidError::from("inline execution panicked")),
+            }
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            self.inner.execute_one_inline(&version, query, context)
+        }
+    }
+
     /// Return the current frozen version id.
     pub fn current_version_id(&self) -> BraidResult<VersionId> {
         let version = self
@@ -324,6 +528,202 @@ where
     P: PlannerBackend,
     C: ComputeBackend,
 {
+    fn checkout_packet(&self, version: &FrozenStackVersion<P, C>) -> BraidResult<JobPacket> {
+        let mut packet = self.packet_pool.checkout("stack.packet_pool")?;
+        packet.clear_for_reuse();
+        for buffer in &version.compiled.static_buffers {
+            packet.load_static_buffer(buffer.slot, &buffer.data);
+        }
+        Ok(packet)
+    }
+
+    fn recycle_packet(&self, mut packet: JobPacket) -> BraidResult<()> {
+        packet.clear_for_reuse();
+        self.packet_pool.give_back("stack.packet_pool", packet)
+    }
+
+    fn encode_packet(
+        &self,
+        version: &FrozenStackVersion<P, C>,
+        queries: &[P::Query],
+    ) -> BraidResult<JobPacket> {
+        let mut packet = self.checkout_packet(version)?;
+        let mut batch_scratch = self.batch_scratch_pool.checkout("stack.batch_scratch")?;
+        batch_scratch.reset();
+
+        let encode_result =
+            self.planner
+                .encode_batch(&version.compiled, queries, &mut packet, &mut batch_scratch);
+
+        batch_scratch.reset();
+        self.batch_scratch_pool
+            .give_back("stack.batch_scratch", batch_scratch)?;
+
+        if let Err(error) = encode_result {
+            let _ = self.recycle_packet(packet);
+            return Err(error);
+        }
+
+        if let Err(error) = validate_runtime_packet(&version.compiled, &packet) {
+            let _ = self.recycle_packet(packet);
+            return Err(error);
+        }
+
+        Ok(packet)
+    }
+
+    fn run_stage_once(
+        &self,
+        version: &FrozenStackVersion<P, C>,
+        stage_index: usize,
+        packet: &mut JobPacket,
+        cancel: &CancelFlag,
+    ) -> BraidResult<()> {
+        let prepared = version
+            .prepared
+            .as_ref()
+            .ok_or_else(|| BraidError::from("missing prepared state"))?;
+        let stage = version
+            .compiled
+            .pipeline
+            .stages
+            .get(stage_index)
+            .ok_or_else(|| BraidError::from("missing stage"))?;
+        self.backend
+            .backend
+            .run_stage(prepared, stage_index, stage, packet, cancel)?;
+        validate_runtime_packet(&version.compiled, packet)
+    }
+
+    fn run_all_stages(
+        &self,
+        version: &FrozenStackVersion<P, C>,
+        packet: &mut JobPacket,
+        cancel: &CancelFlag,
+    ) -> BraidResult<()> {
+        for stage_index in 0..version.compiled.pipeline.stages.len() {
+            if cancel.is_cancelled() {
+                return Err(BraidError::Cancelled);
+            }
+            self.run_stage_once(version, stage_index, packet, cancel)?;
+        }
+        Ok(())
+    }
+
+    fn run_one_all_stages(
+        &self,
+        version: &FrozenStackVersion<P, C>,
+        packet: &mut JobPacket,
+        cancel: &CancelFlag,
+    ) -> BraidResult<()> {
+        let prepared = version
+            .prepared
+            .as_ref()
+            .ok_or_else(|| BraidError::from("missing prepared state"))?;
+        for (stage_index, stage) in version.compiled.pipeline.stages.iter().enumerate() {
+            if cancel.is_cancelled() {
+                return Err(BraidError::Cancelled);
+            }
+            self.backend
+                .backend
+                .run_one_stage(prepared, stage_index, stage, packet, cancel)?;
+            validate_runtime_packet(&version.compiled, packet)?;
+        }
+        Ok(())
+    }
+
+    fn decode_packet(
+        &self,
+        version: &FrozenStackVersion<P, C>,
+        packet: JobPacket,
+    ) -> BraidResult<Vec<P::Resolution>> {
+        let decode_result = validate_runtime_packet(&version.compiled, &packet)
+            .and_then(|_| self.planner.decode_batch(&version.compiled, &packet));
+        let recycle_result = self.recycle_packet(packet);
+        match decode_result {
+            Ok(values) => {
+                recycle_result?;
+                Ok(values)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn execute_inline(
+        &self,
+        version: &FrozenStackVersion<P, C>,
+        queries: &[P::Query],
+        context: &mut InlineContext,
+    ) -> BraidResult<Vec<P::Resolution>> {
+        if context.cancel.is_cancelled() {
+            return Err(BraidError::Cancelled);
+        }
+        context.packet.clear_for_reuse();
+        for buffer in &version.compiled.static_buffers {
+            context.packet.load_static_buffer(buffer.slot, &buffer.data);
+        }
+        context.batch_scratch.reset();
+        self.planner.encode_batch(
+            &version.compiled,
+            queries,
+            &mut context.packet,
+            &mut context.batch_scratch,
+        )?;
+        context.batch_scratch.reset();
+        validate_runtime_packet(&version.compiled, &context.packet)?;
+        if let Err(error) = self.run_all_stages(version, &mut context.packet, &context.cancel) {
+            context.packet.clear_for_reuse();
+            return Err(error);
+        }
+        validate_runtime_packet(&version.compiled, &context.packet)?;
+        self.planner
+            .decode_batch(&version.compiled, &context.packet)
+    }
+
+    fn execute_one_inline(
+        &self,
+        version: &FrozenStackVersion<P, C>,
+        query: &P::Query,
+        context: &mut InlineContext,
+    ) -> BraidResult<P::Resolution> {
+        if context.cancel.is_cancelled() {
+            return Err(BraidError::Cancelled);
+        }
+        context.packet.clear_for_reuse();
+        for buffer in &version.compiled.static_buffers {
+            context.packet.load_static_buffer(buffer.slot, &buffer.data);
+        }
+        context.batch_scratch.reset();
+        self.planner.encode_one(
+            &version.compiled,
+            query,
+            &mut context.packet,
+            &mut context.batch_scratch,
+        )?;
+        context.batch_scratch.reset();
+        validate_runtime_packet(&version.compiled, &context.packet)?;
+        if let Err(error) = self.run_one_all_stages(version, &mut context.packet, &context.cancel) {
+            context.packet.clear_for_reuse();
+            return Err(error);
+        }
+        validate_runtime_packet(&version.compiled, &context.packet)?;
+        self.planner.decode_one(&version.compiled, &context.packet)
+    }
+
+    fn execute_one_direct_inline(
+        &self,
+        version: &FrozenStackVersion<P, C>,
+        query: &P::Query,
+        context: &mut InlineContext,
+    ) -> BraidResult<P::Resolution> {
+        if context.cancel.is_cancelled() {
+            return Err(BraidError::Cancelled);
+        }
+        self.planner
+            .resolve_one_direct(&version.compiled, query)
+            .ok_or_else(|| BraidError::from("missing direct one-query planner path"))?
+    }
+
     fn compile_from_state(&self, state: &P::State) -> BraidResult<VersionId> {
         let mut planner_scratch = self
             .planner_scratch
@@ -478,39 +878,7 @@ where
         }
 
         self.inner.mark_running(&self.record)?;
-
-        let mut packet = self.inner.packet_pool.checkout("stack.packet_pool")?;
-        packet.clear_for_reuse();
-        for buffer in &self.version.compiled.static_buffers {
-            packet.load_static_buffer(buffer.slot, &buffer.data);
-        }
-        let mut batch_scratch = self
-            .inner
-            .batch_scratch_pool
-            .checkout("stack.batch_scratch")?;
-        batch_scratch.reset();
-
-        let encode_result = self.inner.planner.encode_batch(
-            &self.version.compiled,
-            &self.queries,
-            &mut packet,
-            &mut batch_scratch,
-        );
-
-        batch_scratch.reset();
-        self.inner
-            .batch_scratch_pool
-            .give_back("stack.batch_scratch", batch_scratch)?;
-
-        if let Err(error) = encode_result {
-            packet.clear_for_reuse();
-            self.inner
-                .packet_pool
-                .give_back("stack.packet_pool", packet)?;
-            return Err(error);
-        }
-        self.version.compiled.validate_packet(&packet)?;
-
+        let packet = self.inner.encode_packet(&self.version, &self.queries)?;
         self.store_packet(packet)?;
         if self.version.compiled.pipeline.stages.is_empty() {
             self.schedule_decode()
@@ -532,26 +900,8 @@ where
             let packet = packet
                 .as_mut()
                 .ok_or_else(|| BraidError::from("missing job packet"))?;
-            let prepared = self
-                .version
-                .prepared
-                .as_ref()
-                .ok_or_else(|| BraidError::from("missing prepared state"))?;
-            let stage = self
-                .version
-                .compiled
-                .pipeline
-                .stages
-                .get(stage_index)
-                .ok_or_else(|| BraidError::from("missing stage"))?;
-            self.inner.backend.backend.run_stage(
-                prepared,
-                stage_index,
-                stage,
-                packet,
-                &self.record.cancel,
-            )?;
-            self.version.compiled.validate_packet(packet)?;
+            self.inner
+                .run_stage_once(&self.version, stage_index, packet, &self.record.cancel)?;
         }
 
         let next_stage = stage_index + 1;
@@ -567,16 +917,8 @@ where
             return Err(BraidError::Cancelled);
         }
 
-        let mut packet = self.take_packet()?;
-        self.version.compiled.validate_packet(&packet)?;
-        let decoded = self
-            .inner
-            .planner
-            .decode_batch(&self.version.compiled, &packet)?;
-        packet.clear_for_reuse();
-        self.inner
-            .packet_pool
-            .give_back("stack.packet_pool", packet)?;
+        let packet = self.take_packet()?;
+        let decoded = self.inner.decode_packet(&self.version, packet)?;
         self.inner.finish_completed(&self.record, decoded)
     }
 
@@ -623,5 +965,21 @@ where
     fn reject_scheduled_task(self: Arc<Self>, error: BraidError) {
         self.cleanup_packet();
         let _ = self.inner.finish_failed(&self.record, error);
+    }
+}
+
+#[inline]
+fn validate_runtime_packet<M>(
+    compiled: &crate::CompiledPlan<M>,
+    packet: &JobPacket,
+) -> BraidResult<()> {
+    #[cfg(debug_assertions)]
+    {
+        compiled.validate_packet(packet)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = (compiled, packet);
+        Ok(())
     }
 }

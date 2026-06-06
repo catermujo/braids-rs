@@ -86,6 +86,35 @@ Important:
 - later recompiles do not mutate that version
 - job order inside one stack is not guaranteed unless the backend lane count and workload effectively serialize it
 
+## Inline Resolve
+
+`Stack::resolve_inline(&queries)` and `Stack::resolve_one_inline(...)` run the same compiled planner and
+backend path directly on the caller thread.
+
+For repeated low-latency calls, reuse `InlineContext` through
+`resolve_inline_with(...)` / `resolve_one_inline_with(...)` so inline path avoids pool mutexes and
+reuses its packet/scratch directly.
+
+Use this when:
+
+- workload is tiny
+- serial latency matters more than async overlap
+- queueing and wakeup cost would dominate real compute
+
+Inline resolve still:
+
+1. snapshots the current frozen version
+2. encodes queries into a `JobPacket`
+3. runs every stage through the backend
+4. decodes planner `Resolution` values
+
+What it skips is async job machinery:
+
+- no job table
+- no executor queue hops
+- no backend lane scheduling
+- no condvar-based `collect()`
+
 ## Update And Recompile
 
 There are three useful update paths:

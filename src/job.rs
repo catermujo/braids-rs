@@ -2,8 +2,8 @@
 
 use crate::error::{BraidError, BraidResult};
 use crate::pipeline::{BufferData, BufferSlot, ElementKind};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Typed element access contract for [`JobPacket`] buffers.
 pub trait PacketElement: Default + Sized {
@@ -43,7 +43,7 @@ impl_packet_element!(u32, U32);
 impl_packet_element!(u64, U64);
 impl_packet_element!(f32, F32);
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 /// Cooperative cancellation flag shared with backend stage execution.
 pub struct CancelFlag {
     inner: Arc<AtomicBool>,
@@ -53,6 +53,11 @@ impl CancelFlag {
     /// Request cancellation.
     pub fn cancel(&self) {
         self.inner.store(true, Ordering::Release);
+    }
+
+    /// Reset cancellation back to the clear state.
+    pub fn reset(&self) {
+        self.inner.store(false, Ordering::Release);
     }
 
     /// Return whether cancellation has been requested.
@@ -90,6 +95,7 @@ pub struct PacketBuffer {
 pub struct JobPacket {
     pub query_count: usize,
     buffers: Vec<PacketBuffer>,
+    slot_indices: Vec<Option<usize>>,
 }
 
 impl JobPacket {
@@ -101,11 +107,21 @@ impl JobPacket {
         }
     }
 
+    fn slot_index(&self, slot: BufferSlot) -> Option<usize> {
+        self.slot_indices.get(slot.0 as usize).copied().flatten()
+    }
+
+    fn record_slot_index(&mut self, slot: BufferSlot, index: usize) {
+        let raw = slot.0 as usize;
+        if self.slot_indices.len() <= raw {
+            self.slot_indices.resize(raw + 1, None);
+        }
+        self.slot_indices[raw] = Some(index);
+    }
+
     fn ensure_slot(&mut self, slot: BufferSlot, expected: ElementKind) -> usize {
-        for (idx, buffer) in self.buffers.iter_mut().enumerate() {
-            if buffer.slot != slot {
-                continue;
-            }
+        if let Some(idx) = self.slot_index(slot) {
+            let buffer = &mut self.buffers[idx];
             if buffer.data.kind() != expected {
                 buffer.data = BufferData::empty(expected);
             }
@@ -116,7 +132,9 @@ impl JobPacket {
             slot,
             data: BufferData::empty(expected),
         });
-        self.buffers.len() - 1
+        let index = self.buffers.len() - 1;
+        self.record_slot_index(slot, index);
+        index
     }
 
     /// Ensure a typed buffer exists at `slot` and resize it to `len`.
@@ -144,6 +162,7 @@ impl JobPacket {
         }
     }
 
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub(crate) fn buffer_descriptors(
         &self,
     ) -> impl Iterator<Item = (BufferSlot, ElementKind, usize)> + '_ {
@@ -154,11 +173,10 @@ impl JobPacket {
 
     /// Read-only typed slice for one slot.
     pub fn slice<T: PacketElement>(&self, slot: BufferSlot) -> BraidResult<&[T]> {
-        let buffer = self
-            .buffers
-            .iter()
-            .find(|buffer| buffer.slot == slot)
+        let idx = self
+            .slot_index(slot)
             .ok_or(BraidError::MissingBuffer(slot))?;
+        let buffer = &self.buffers[idx];
         T::get(&buffer.data).ok_or(BraidError::InvalidBufferType {
             slot,
             expected: T::KIND,
@@ -167,11 +185,10 @@ impl JobPacket {
 
     /// Mutable typed slice for one slot.
     pub fn slice_mut<T: PacketElement>(&mut self, slot: BufferSlot) -> BraidResult<&mut [T]> {
-        let buffer = self
-            .buffers
-            .iter_mut()
-            .find(|buffer| buffer.slot == slot)
+        let idx = self
+            .slot_index(slot)
             .ok_or(BraidError::MissingBuffer(slot))?;
+        let buffer = &mut self.buffers[idx];
         let values = T::get_mut(&mut buffer.data).ok_or(BraidError::InvalidBufferType {
             slot,
             expected: T::KIND,
@@ -233,25 +250,27 @@ impl JobPacket {
         slots: [BufferSlot; N],
         f: impl FnOnce([&mut [T]; N]) -> BraidResult<R>,
     ) -> BraidResult<R> {
-        let mut indices = Vec::with_capacity(slots.len());
-        for slot in slots {
-            let Some(index) = self.buffers.iter().position(|buffer| buffer.slot == slot) else {
+        let mut indices = [0usize; N];
+        for (i, slot) in slots.into_iter().enumerate() {
+            let Some(index) = self.slot_index(slot) else {
                 return Err(BraidError::MissingBuffer(slot));
             };
-            if indices.contains(&index) {
-                return Err(BraidError::from("duplicate typed buffer slot request"));
+            for other in indices.iter().take(i) {
+                if *other == index {
+                    return Err(BraidError::from("duplicate typed buffer slot request"));
+                }
             }
             let buffer = &self.buffers[index];
             if buffer.data.kind() != T::KIND {
                 return Err(BraidError::InvalidBufferType {
-                    slot: slot,
+                    slot,
                     expected: T::KIND,
                 });
             }
-            indices.push(index);
+            indices[i] = index;
         }
 
-        let mut ptrs = Vec::with_capacity(indices.len());
+        let mut ptrs = Vec::with_capacity(N);
         for index in indices {
             let buffer = &mut self.buffers[index];
             let values = T::get_mut(&mut buffer.data).expect("buffer kind mismatch");

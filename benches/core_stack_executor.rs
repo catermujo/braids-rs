@@ -2,8 +2,9 @@
 
 use braid::{
     BackendConfig, BatchScratch, BraidError, BraidExecutor, BraidResult, BufferBinding, BufferSlot,
-    BufferSpec, CancelFlag, CompiledPlan, ComputeBackend, ComputeScratch, ElementKind, JobPacket,
-    KernelKind, KernelSpec, PlannerBackend, PlannerScratch, Stack, StageSpec,
+    BufferSpec, CancelFlag, CompiledPlan, ComputeBackend, ComputeScratch, ElementKind,
+    InlineContext, JobPacket, KernelKind, KernelSpec, PlannerBackend, PlannerScratch, Stack,
+    StageSpec,
 };
 use std::hint::black_box;
 use std::sync::{Arc, Barrier, Mutex};
@@ -15,6 +16,8 @@ const STAGE_SCAN_KIND: KernelKind = KernelKind(0xB100);
 const STAGE_FINISH_KIND: KernelKind = KernelKind(0xB200);
 const COMPILE_HEAVY_ROUNDS: u32 = 60_000;
 const PREPARE_HEAVY_ROUNDS: u32 = 50_000;
+const SERIAL_ONE_QUERY_SEED: usize = 0xA500;
+const SERIAL_ONE_QUERY_BASE: u32 = 0xA500_A500;
 
 fn main() -> BraidResult<()> {
     let config = BenchConfig::from_args();
@@ -32,6 +35,9 @@ fn main() -> BraidResult<()> {
     );
 
     let reports = vec![
+        bench_serial_async_one_query(&config)?,
+        bench_serial_inline_slice_one_query(&config)?,
+        bench_serial_inline_one_query(&config)?,
         bench_parallel_stacks(&config)?,
         bench_serialized_backend_stacks(&config)?,
         bench_hidden_serialized_backend_stacks(&config)?,
@@ -654,6 +660,108 @@ fn bench_parallel_stacks(config: &BenchConfig) -> BraidResult<BenchReport> {
         iterations: config.iterations,
         jobs: config.iterations * stacks.len(),
         queries: config.iterations * stacks.len() * config.batch_size,
+        checksum,
+        aux_label: None,
+        aux_elapsed: Duration::ZERO,
+        aux_units: 0,
+    })
+}
+
+fn bench_serial_async_one_query(config: &BenchConfig) -> BraidResult<BenchReport> {
+    let executor = Arc::new(BraidExecutor::new(1));
+    let planner = Arc::new(BenchPlanner::plain());
+    let backend = executor.register_backend(
+        Arc::new(BenchBackend::plain()),
+        BackendConfig { lane_count: 1 },
+    );
+    let stack = make_stack(&executor, &planner, &backend, config, SERIAL_ONE_QUERY_SEED)?;
+
+    warm_inline_and_async(&stack)?;
+
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    for iter in 0..config.iterations {
+        let query = [mix32(iter as u32 ^ SERIAL_ONE_QUERY_BASE)];
+        let job = stack.dispatch(query.to_vec())?;
+        let values = stack.collect(job)?;
+        checksum = checksum.wrapping_add(digest(values.as_slice()));
+        black_box(&values);
+    }
+
+    Ok(BenchReport {
+        name: "serial_async_one_query",
+        elapsed: start.elapsed(),
+        iterations: config.iterations,
+        jobs: config.iterations,
+        queries: config.iterations,
+        checksum,
+        aux_label: None,
+        aux_elapsed: Duration::ZERO,
+        aux_units: 0,
+    })
+}
+
+fn bench_serial_inline_slice_one_query(config: &BenchConfig) -> BraidResult<BenchReport> {
+    let executor = Arc::new(BraidExecutor::new(1));
+    let planner = Arc::new(BenchPlanner::plain());
+    let backend = executor.register_backend(
+        Arc::new(BenchBackend::plain()),
+        BackendConfig { lane_count: 1 },
+    );
+    let stack = make_stack(&executor, &planner, &backend, config, SERIAL_ONE_QUERY_SEED)?;
+
+    warm_inline_and_async(&stack)?;
+
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    let mut inline = InlineContext::default();
+    for iter in 0..config.iterations {
+        let query = [mix32(iter as u32 ^ SERIAL_ONE_QUERY_BASE)];
+        let values = stack.resolve_inline_with(&query, &mut inline)?;
+        checksum = checksum.wrapping_add(digest(values.as_slice()));
+        black_box(&values);
+    }
+
+    Ok(BenchReport {
+        name: "serial_inline_slice_one_query",
+        elapsed: start.elapsed(),
+        iterations: config.iterations,
+        jobs: config.iterations,
+        queries: config.iterations,
+        checksum,
+        aux_label: None,
+        aux_elapsed: Duration::ZERO,
+        aux_units: 0,
+    })
+}
+
+fn bench_serial_inline_one_query(config: &BenchConfig) -> BraidResult<BenchReport> {
+    let executor = Arc::new(BraidExecutor::new(1));
+    let planner = Arc::new(BenchPlanner::plain());
+    let backend = executor.register_backend(
+        Arc::new(BenchBackend::plain()),
+        BackendConfig { lane_count: 1 },
+    );
+    let stack = make_stack(&executor, &planner, &backend, config, SERIAL_ONE_QUERY_SEED)?;
+
+    warm_inline_and_async(&stack)?;
+
+    let start = Instant::now();
+    let mut checksum = 0u64;
+    let mut inline = InlineContext::default();
+    for iter in 0..config.iterations {
+        let value = stack
+            .resolve_one_inline_with(mix32(iter as u32 ^ SERIAL_ONE_QUERY_BASE), &mut inline)?;
+        checksum = checksum.wrapping_add(digest(&[value]));
+        black_box(value);
+    }
+
+    Ok(BenchReport {
+        name: "serial_inline_one_query",
+        elapsed: start.elapsed(),
+        iterations: config.iterations,
+        jobs: config.iterations,
+        queries: config.iterations,
         checksum,
         aux_label: None,
         aux_elapsed: Duration::ZERO,
@@ -1726,6 +1834,16 @@ fn warm_parallel_stacks(
     for (index, job) in jobs {
         black_box(stacks[index].collect(job)?);
     }
+    Ok(())
+}
+
+fn warm_inline_and_async(stack: &Stack<BenchPlanner, BenchBackend>) -> BraidResult<()> {
+    let query = [mix32(0x5151_5151)];
+    let mut inline = InlineContext::default();
+    black_box(stack.resolve_inline_with(&query, &mut inline)?);
+    black_box(stack.resolve_one_inline_with(query[0], &mut inline)?);
+    let job = stack.dispatch(query.to_vec())?;
+    black_box(stack.collect(job)?);
     Ok(())
 }
 

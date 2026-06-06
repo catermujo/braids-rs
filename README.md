@@ -94,6 +94,16 @@ for query in &queries {
 }
 ```
 
+For tiny serial work where queueing would dominate compute, use inline resolution instead:
+
+```rust
+let summary = stack.resolve_one_inline(query)?;
+let summaries = stack.resolve_inline(&queries)?;
+
+let mut inline = braid::InlineContext::default();
+let summary = stack.resolve_one_inline_with(query, &mut inline)?;
+```
+
 Measured on this machine on `2026-06-03`:
 
 ```text

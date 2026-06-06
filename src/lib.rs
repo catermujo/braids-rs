@@ -38,7 +38,7 @@ pub use pipeline::{
 pub use planner::PlannerBackend;
 pub use scratch::{BatchScratch, ComputeScratch, PlannerScratch};
 pub use slot_table::{SlotKey, SlotTable};
-pub use stack::Stack;
+pub use stack::{InlineContext, Stack};
 
 #[cfg(test)]
 mod tests;

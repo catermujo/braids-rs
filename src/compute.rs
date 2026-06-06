@@ -32,4 +32,19 @@ pub trait ComputeBackend: Send + Sync + 'static {
         packet: &mut JobPacket,
         cancel: &CancelFlag,
     ) -> BraidResult<()>;
+
+    /// Run one compiled stage for the single-query inline path.
+    ///
+    /// Override this when one-query execution can skip batch-oriented packet reads, loops, or
+    /// range handling. The default delegates to [`Self::run_stage`].
+    fn run_one_stage(
+        &self,
+        prepared: &Self::Prepared,
+        stage_index: usize,
+        stage: &StageSpec,
+        packet: &mut JobPacket,
+        cancel: &CancelFlag,
+    ) -> BraidResult<()> {
+        self.run_stage(prepared, stage_index, stage, packet, cancel)
+    }
 }

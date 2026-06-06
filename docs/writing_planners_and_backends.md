@@ -173,6 +173,22 @@ Typical encode flow:
 
 Keep packet layout deterministic. Decoder should not guess.
 
+If encode needs several temporary arrays of the same primitive type, use scratch checkout helpers
+instead of allocating fresh locals every call:
+
+```rust
+let mut entry_ids = scratch.spare_u32s.checkout();
+let mut required_ids = scratch.spare_u32s.checkout();
+
+// fill and use temp vectors here
+
+scratch.spare_u32s.give_back(entry_ids);
+scratch.spare_u32s.give_back(required_ids);
+```
+
+Keep the direct `scratch.u32s` / `scratch.u64s` / `scratch.f32s` fields for the one primary
+scratch vector. Use checkout helpers when one planner needs several same-typed temps at once.
+
 ## Transactional Updates
 
 If planner changes can fail during compile, prefer:
