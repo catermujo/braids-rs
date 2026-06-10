@@ -309,7 +309,7 @@ impl PlannerBackend for BenchPlanner {
                     StageSpec {
                         kernels: vec![KernelSpec {
                             kind_id: STAGE_SCAN_KIND,
-                            payload: scan_payload.into(),
+                            payload: scan_payload,
                             bindings: vec![BufferBinding {
                                 slot: DATA_SLOT,
                                 access: braid::BufferAccess::ReadWrite,
@@ -320,7 +320,7 @@ impl PlannerBackend for BenchPlanner {
                     StageSpec {
                         kernels: vec![KernelSpec {
                             kind_id: STAGE_FINISH_KIND,
-                            payload: finish_payload.into(),
+                            payload: finish_payload,
                             bindings: vec![BufferBinding {
                                 slot: DATA_SLOT,
                                 access: braid::BufferAccess::ReadWrite,

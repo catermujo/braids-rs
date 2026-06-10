@@ -270,23 +270,17 @@ impl JobPacket {
             indices[i] = index;
         }
 
-        let mut ptrs = Vec::with_capacity(N);
-        for index in indices {
+        let mut ptrs = [std::ptr::slice_from_raw_parts_mut(std::ptr::null_mut::<T>(), 0); N];
+        for (i, index) in indices.into_iter().enumerate() {
             let buffer = &mut self.buffers[index];
             let values = T::get_mut(&mut buffer.data).expect("buffer kind mismatch");
-            ptrs.push(values.as_mut_slice() as *mut [T]);
+            ptrs[i] = values.as_mut_slice() as *mut [T];
         }
 
-        let mut views = Vec::with_capacity(ptrs.len());
-        for ptr in ptrs {
+        let views = std::array::from_fn(|i| {
             // The requested slots are unique, so these mutable views do not alias.
-            unsafe {
-                views.push(&mut *ptr);
-            }
-        }
-        f(views
-            .try_into()
-            .map_err(|_| BraidError::from("typed buffer slot count mismatch"))
-            .unwrap())
+            unsafe { &mut *ptrs[i] }
+        });
+        f(views)
     }
 }

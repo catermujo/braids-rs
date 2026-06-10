@@ -94,9 +94,10 @@ pub(crate) trait KernelPayload: Sized {
         scratch.reset();
         let mut writer = PayloadWriter::new(&mut scratch.bytes);
         self.encode_into(&mut writer)?;
+        let payload = std::mem::take(&mut scratch.bytes);
         Ok(KernelSpec {
             kind_id: self.kind().kind(),
-            payload: scratch.bytes.clone().into(),
+            payload: payload.into(),
             bindings: Vec::new(),
             dispatch: braid::DispatchHint::WholeBatch,
         })
@@ -166,11 +167,27 @@ impl PlannerBackend for FastNoisePlanner {
         scratch: &mut BatchScratch,
     ) -> BraidResult<()> {
         scratch.reset();
-        packet.query_count = queries.len();
+        let query_count = queries.len();
+        packet.query_count = query_count;
 
-        let mut meta_values = vec![0u32; queries.len() * 3];
-        let mut float_values = vec![0.0f32; queries.len() * 6];
-        let mut offset_values = vec![0u32; queries.len() + 1];
+        let (meta_ptr, meta_len) = {
+            let meta_values = packet.ensure::<u32>(SLOT_QUERY_META, query_count * 3);
+            let meta_len = meta_values.len();
+            (meta_values.as_mut_ptr(), meta_len)
+        };
+        let meta_values = unsafe { std::slice::from_raw_parts_mut(meta_ptr, meta_len) };
+        let (float_ptr, float_len) = {
+            let float_values = packet.ensure::<f32>(SLOT_QUERY_F32, query_count * 6);
+            let float_len = float_values.len();
+            (float_values.as_mut_ptr(), float_len)
+        };
+        let float_values = unsafe { std::slice::from_raw_parts_mut(float_ptr, float_len) };
+        let (offset_ptr, offset_len) = {
+            let offset_values = packet.ensure::<u32>(SLOT_QUERY_OFFSETS, query_count + 1);
+            let offset_len = offset_values.len();
+            (offset_values.as_mut_ptr(), offset_len)
+        };
+        let offset_values = unsafe { std::slice::from_raw_parts_mut(offset_ptr, offset_len) };
 
         let mut cursor = 0usize;
         offset_values[0] = 0;
@@ -224,16 +241,6 @@ impl PlannerBackend for FastNoisePlanner {
             }
             offset_values[index + 1] = cursor as u32;
         }
-
-        packet
-            .ensure::<u32>(SLOT_QUERY_META, meta_values.len())
-            .copy_from_slice(meta_values.as_slice());
-        packet
-            .ensure::<f32>(SLOT_QUERY_F32, float_values.len())
-            .copy_from_slice(float_values.as_slice());
-        packet
-            .ensure::<u32>(SLOT_QUERY_OFFSETS, offset_values.len())
-            .copy_from_slice(offset_values.as_slice());
 
         Ok(())
     }
@@ -361,10 +368,19 @@ impl CpuKernelFactory for FastNoiseKernelFactory {
 
 impl CpuKernel for GridInitKernel {
     fn run(&self, packet: &mut JobPacket, cancel: &CancelFlag) -> BraidResult<()> {
-        let meta = packet.slice::<u32>(SLOT_QUERY_META)?.to_vec();
-        let floats = packet.slice::<f32>(SLOT_QUERY_F32)?.to_vec();
-        let offsets = packet.slice::<u32>(SLOT_QUERY_OFFSETS)?.to_vec();
-        let total = total_samples_from_offsets(offsets.as_slice());
+        let meta = {
+            let meta = packet.slice::<u32>(SLOT_QUERY_META)?;
+            unsafe { std::slice::from_raw_parts(meta.as_ptr(), meta.len()) }
+        };
+        let floats = {
+            let floats = packet.slice::<f32>(SLOT_QUERY_F32)?;
+            unsafe { std::slice::from_raw_parts(floats.as_ptr(), floats.len()) }
+        };
+        let offsets = {
+            let offsets = packet.slice::<u32>(SLOT_QUERY_OFFSETS)?;
+            unsafe { std::slice::from_raw_parts(offsets.as_ptr(), offsets.len()) }
+        };
+        let total = total_samples_from_offsets(offsets);
         let query_count = packet.query_count;
         packet.ensure::<f32>(SLOT_BASE_X, total);
         packet.ensure::<f32>(SLOT_BASE_Y, total);

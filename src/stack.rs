@@ -290,8 +290,8 @@ where
             Arc::clone(&version)
         };
         context.cancel.reset();
-        if P::PREFER_DIRECT_ONE_QUERY_INLINE {
-            if let [query] = queries {
+        if P::PREFER_DIRECT_ONE_QUERY_INLINE
+            && let [query] = queries {
                 #[cfg(debug_assertions)]
                 {
                     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -312,10 +312,9 @@ where
                         .map(|value| vec![value]);
                 }
             }
-        }
 
-        if P::PREFER_ONE_QUERY_INLINE {
-            if let [query] = queries {
+        if P::PREFER_ONE_QUERY_INLINE
+            && let [query] = queries {
                 #[cfg(debug_assertions)]
                 {
                     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -335,7 +334,6 @@ where
                         .map(|value| vec![value]);
                 }
             }
-        }
 
         #[cfg(debug_assertions)]
         {

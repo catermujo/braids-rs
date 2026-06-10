@@ -11,35 +11,45 @@ pub(crate) trait RunnableTask: Send {
     fn reject(self: Box<Self>, error: BraidError);
 }
 
-pub(crate) struct TaskFn {
-    pub(crate) func: Option<Box<dyn FnOnce() + Send>>,
-    pub(crate) reject: Option<Box<dyn FnOnce(BraidError) + Send>>,
+pub(crate) struct TaskFn<F, R = fn(BraidError)>
+where
+    F: FnOnce() + Send + 'static,
+    R: FnOnce(BraidError) + Send + 'static,
+{
+    pub(crate) func: Option<F>,
+    pub(crate) reject: Option<R>,
 }
 
-impl TaskFn {
-    fn new<F>(func: F) -> Self
-    where
-        F: FnOnce() + Send + 'static,
-    {
+impl<F> TaskFn<F, fn(BraidError)>
+where
+    F: FnOnce() + Send + 'static,
+{
+    fn new(func: F) -> Self {
         Self {
-            func: Some(Box::new(func)),
+            func: Some(func),
             reject: None,
         }
     }
+}
 
-    fn with_rejection<F, R>(func: F, reject: R) -> Self
-    where
-        F: FnOnce() + Send + 'static,
-        R: FnOnce(BraidError) + Send + 'static,
-    {
+impl<F, R> TaskFn<F, R>
+where
+    F: FnOnce() + Send + 'static,
+    R: FnOnce(BraidError) + Send + 'static,
+{
+    fn with_rejection(func: F, reject: R) -> Self {
         Self {
-            func: Some(Box::new(func)),
-            reject: Some(Box::new(reject)),
+            func: Some(func),
+            reject: Some(reject),
         }
     }
 }
 
-impl RunnableTask for TaskFn {
+impl<F, R> RunnableTask for TaskFn<F, R>
+where
+    F: FnOnce() + Send + 'static,
+    R: FnOnce(BraidError) + Send + 'static,
+{
     fn run(mut self: Box<Self>) {
         if let Some(func) = self.func.take() {
             func();

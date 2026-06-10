@@ -11,30 +11,41 @@ resolver = "3"
 [lib]
 path = "src/lib.rs"
 
+# [[bench]]
+# name = "core_stack_executor"
+# path = "benches/core_stack_executor.rs"
+# harness = false
+
+# [[bench]]
+# name = "fastnoise_worldgen"
+# path = "benches/fastnoise_worldgen.rs"
+# harness = false
+
 [[bench]]
-name = "core_stack_executor"
+name = "criterion_packet_api"
 harness = false
 
 [[bench]]
-name = "fastnoise_worldgen"
+name = "criterion_stack_api"
 harness = false
 
 [dev-dependencies]
 braid-fastnoise = { path = "fastnoise" }
+criterion = "0.8"
 
 [workspace.lints.rust]
-redundant_imports = "warn"
-unused_imports = "warn"
-future-incompatible = "warn"
-nonstandard_style = { level = "warn", priority = -1 }
+redundant_imports = "deny"
+unused_imports = "deny"
+future-incompatible = "deny"
+nonstandard_style = "deny"
 
 [workspace.lints.clippy]
-all = { priority = 1, level = "deny" }
+all = "deny"
 
-unwrap_used = { priority = 11, level = "deny" }
-redundant_clone = { level = "deny", priority = 9 }
-manual_while_let_some = { level = "deny", priority = 4 }
-needless_return = { level = "deny", priority = 8 }
-redundant_else = { level = "deny", priority = 8 }
-unwrap_or_default = { level = "deny", priority = 8 }
-manual_unwrap_or_default = { level = "deny", priority = 8 }
+unwrap_used = "deny"
+redundant_clone = "deny"
+manual_while_let_some = "deny"
+needless_return = "deny"
+redundant_else = "deny"
+unwrap_or_default = "deny"
+manual_unwrap_or_default = "deny"
