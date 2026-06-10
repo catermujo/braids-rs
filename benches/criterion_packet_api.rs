@@ -20,6 +20,18 @@ fn make_packet(count: usize) -> JobPacket {
     packet
 }
 
+fn make_scratch_state(size: usize) -> (PlannerScratch, BatchScratch, ComputeScratch) {
+    let mut planner_scratch = PlannerScratch::default();
+    let mut batch_scratch = BatchScratch::default();
+    let mut compute_scratch = ComputeScratch::default();
+
+    planner_scratch.bytes.resize(size, 9);
+    planner_scratch.u32s.resize(size, 0);
+    batch_scratch.u32s.resize(size, 0);
+    compute_scratch.u32s.resize(size, 0);
+    (planner_scratch, batch_scratch, compute_scratch)
+}
+
 fn bench_job_packet(c: &mut Criterion) {
     let mut group = c.benchmark_group("job_packet_api");
     group.throughput(Throughput::Elements(1024));
@@ -63,31 +75,49 @@ fn bench_job_packet(c: &mut Criterion) {
         );
     });
 
-    group.bench_function("packet_recycle_and_clear", |b| {
-        b.iter_batched(
-            || {
-                let mut planner_scratch = PlannerScratch::default();
-                let mut batch_scratch = BatchScratch::default();
-                let mut compute_scratch = ComputeScratch::default();
+    group.bench_with_input(BenchmarkId::new("packet_clear_for_reuse", 1024), &1024usize, |b, &count| {
+        let mut packet = make_packet(count);
 
-                planner_scratch.bytes.resize(1024, 9);
-                planner_scratch.u32s = (0..1024u32).collect();
-                batch_scratch.u32s = (0..1024u32).collect();
-                compute_scratch.u32s = (0..1024u32).collect();
-                (planner_scratch, batch_scratch, compute_scratch)
-            },
-            |(mut planner_scratch, mut batch_scratch, mut compute_scratch)| {
-                planner_scratch.reset();
-                batch_scratch.reset();
-                compute_scratch.reset();
-                black_box((
-                    planner_scratch.bytes.len(),
-                    batch_scratch.u32s.len(),
-                    compute_scratch.u32s.len(),
-                ))
-            },
-            BatchSize::SmallInput,
-        );
+        b.iter(|| {
+            packet.clear_for_reuse();
+            black_box(packet.query_count);
+        });
+    });
+
+    group.bench_with_input(BenchmarkId::new("packet_recycle_and_clear", 1024), &1024usize, |b, &size| {
+        let (mut planner_scratch, mut batch_scratch, mut compute_scratch) = make_scratch_state(size);
+        let mut packet = make_packet(size);
+
+        b.iter(|| {
+            planner_scratch.reset();
+            batch_scratch.reset();
+            compute_scratch.reset();
+            packet.clear_for_reuse();
+            black_box((
+                planner_scratch.bytes.len(),
+                batch_scratch.u32s.len(),
+                compute_scratch.u32s.len(),
+                packet.query_count,
+            ));
+        });
+    });
+
+    group.bench_function("packet_recycle_and_clear_4k", |b| {
+        let (mut planner_scratch, mut batch_scratch, mut compute_scratch) = make_scratch_state(4096);
+        let mut packet = make_packet(4096);
+
+        b.iter(|| {
+            planner_scratch.reset();
+            batch_scratch.reset();
+            compute_scratch.reset();
+            packet.clear_for_reuse();
+            black_box((
+                planner_scratch.bytes.len(),
+                batch_scratch.u32s.len(),
+                compute_scratch.u32s.len(),
+                packet.query_count,
+            ));
+        });
     });
 
     group.finish();
