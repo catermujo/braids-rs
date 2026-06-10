@@ -776,6 +776,30 @@ fn packet_slice_many_groups_flat_buffers() {
     assert!(packet.slice_many::<f32, 4>(TOY_INPUT_SLOT).is_err());
 }
 
+
+#[test]
+fn packet_slice_many_mut_groups_flat_buffers() {
+    let mut packet = JobPacket::default();
+    packet
+        .ensure::<f32>(TOY_INPUT_SLOT, 6)
+        .copy_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let pairs = packet.slice_many_mut::<f32, 2>(TOY_INPUT_SLOT).unwrap();
+    assert_eq!(pairs, &[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]);
+
+    {
+        let pairs_mut = packet.slice_many_mut::<f32, 2>(TOY_INPUT_SLOT).unwrap();
+        pairs_mut[1][0] = 30.0;
+        pairs_mut[1][1] = 40.0;
+    }
+
+    assert_eq!(
+        packet.slice::<f32>(TOY_INPUT_SLOT).unwrap(),
+        &[1.0, 2.0, 30.0, 40.0, 5.0, 6.0]
+    );
+    assert!(packet.slice_many_mut::<f32, 4>(TOY_INPUT_SLOT).is_err());
+}
+
 #[test]
 fn executor_runs_stacks_in_parallel_with_shared_backend_instance() {
     let executor = Arc::new(BraidExecutor::new(2));

@@ -14,13 +14,17 @@ impl<T> SpareVecs<T> {
 
     /// Return one reusable vector after clearing logical contents.
     pub fn give_back(&mut self, mut values: Vec<T>) {
-        values.clear();
+        if !values.is_empty() {
+            values.clear();
+        }
         self.buffers.push(values);
     }
 
     pub(crate) fn reset(&mut self) {
         for values in &mut self.buffers {
-            values.clear();
+            if !values.is_empty() {
+                values.clear();
+            }
         }
     }
 }
@@ -47,10 +51,18 @@ pub struct PlannerScratch {
 impl PlannerScratch {
     /// Clear logical contents while keeping capacity.
     pub fn reset(&mut self) {
-        self.bytes.clear();
-        self.u32s.clear();
-        self.u64s.clear();
-        self.f32s.clear();
+        if !self.bytes.is_empty() {
+            self.bytes.clear();
+        }
+        if !self.u32s.is_empty() {
+            self.u32s.clear();
+        }
+        if !self.u64s.is_empty() {
+            self.u64s.clear();
+        }
+        if !self.f32s.is_empty() {
+            self.f32s.clear();
+        }
         self.spare_u32s.reset();
         self.spare_u64s.reset();
         self.spare_f32s.reset();
@@ -77,9 +89,15 @@ pub struct BatchScratch {
 impl BatchScratch {
     /// Clear logical contents while keeping capacity.
     pub fn reset(&mut self) {
-        self.u32s.clear();
-        self.u64s.clear();
-        self.f32s.clear();
+        if !self.u32s.is_empty() {
+            self.u32s.clear();
+        }
+        if !self.u64s.is_empty() {
+            self.u64s.clear();
+        }
+        if !self.f32s.is_empty() {
+            self.f32s.clear();
+        }
         self.spare_u32s.reset();
         self.spare_u64s.reset();
         self.spare_f32s.reset();
@@ -104,9 +122,15 @@ pub struct ComputeScratch {
 impl ComputeScratch {
     /// Clear logical contents while keeping capacity.
     pub fn reset(&mut self) {
-        self.bytes.clear();
-        self.u32s.clear();
-        self.f32s.clear();
+        if !self.bytes.is_empty() {
+            self.bytes.clear();
+        }
+        if !self.u32s.is_empty() {
+            self.u32s.clear();
+        }
+        if !self.f32s.is_empty() {
+            self.f32s.clear();
+        }
         self.spare_u32s.reset();
         self.spare_f32s.reset();
     }

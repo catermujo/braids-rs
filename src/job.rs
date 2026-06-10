@@ -96,15 +96,20 @@ pub struct JobPacket {
     pub query_count: usize,
     buffers: Vec<PacketBuffer>,
     slot_indices: Vec<Option<usize>>,
+    is_dirty: bool,
 }
 
 impl JobPacket {
     /// Clear logical contents while keeping allocations for reuse.
     pub fn clear_for_reuse(&mut self) {
         self.query_count = 0;
+        if !self.is_dirty {
+            return;
+        }
         for buffer in &mut self.buffers {
             buffer.data.clear();
         }
+        self.is_dirty = false;
     }
 
     fn slot_index(&self, slot: BufferSlot) -> Option<usize> {
@@ -142,6 +147,7 @@ impl JobPacket {
         let idx = self.ensure_slot(slot, T::KIND);
         let values = T::get_mut(&mut self.buffers[idx].data).expect("buffer kind mismatch");
         values.resize_with(len, T::default);
+        self.is_dirty = true;
         values
     }
 
@@ -193,6 +199,7 @@ impl JobPacket {
             slot,
             expected: T::KIND,
         })?;
+        self.is_dirty = true;
         Ok(values.as_mut_slice())
     }
 
@@ -229,6 +236,7 @@ impl JobPacket {
                 "slice_many_mut requires width greater than zero".to_owned(),
             ));
         }
+        self.is_dirty = true;
         let values = self.slice_mut::<T>(slot)?;
         let len = values.len();
         let (chunks, remainder) = values.as_chunks_mut::<N>();
