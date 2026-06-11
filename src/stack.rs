@@ -179,7 +179,7 @@ where
             .state
             .lock()
             .map_err(|_| BraidError::poisoned("stack.state"))?;
-        self.inner.planner.apply(&mut state, &changes)
+        self.inner.planner.apply(&mut state, changes)
     }
 
     /// Reset the live mutable planner state from a fresh spec without recompiling.
@@ -212,7 +212,7 @@ where
             .state
             .lock()
             .map_err(|_| BraidError::poisoned("stack.state"))?;
-        let next_state = self.inner.planner.updated_state(&state, &changes)?;
+        let next_state = self.inner.planner.updated_state(&state, changes)?;
         let version_id = self.inner.compile_from_state(&next_state)?;
         *state = next_state;
         Ok(version_id)
