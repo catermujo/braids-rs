@@ -292,3 +292,128 @@ impl JobPacket {
         f(views)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{BraidError, JobPacket};
+    use crate::pipeline::BufferSlot;
+    use crate::scratch::BatchScratch;
+
+    #[test]
+    fn batch_scratch_reuses_extra_same_typed_vectors() {
+        let mut scratch = BatchScratch::default();
+        let mut first = scratch.spare_u32s.checkout();
+        first.reserve(64);
+        let capacity = first.capacity();
+        first.extend([1, 2, 3]);
+        scratch.spare_u32s.give_back(first);
+
+        let second = scratch.spare_u32s.checkout();
+        assert!(second.capacity() >= capacity);
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn packet_slice_many_groups_flat_buffers() {
+        let mut packet = JobPacket::default();
+        packet
+            .ensure::<f32>(BufferSlot(0), 6)
+            .copy_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+        let pairs = packet.slice_many::<f32, 2>(BufferSlot(0)).unwrap();
+        assert_eq!(pairs, &[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]);
+
+        {
+            let pairs_mut = packet.slice_many_mut::<f32, 2>(BufferSlot(0)).unwrap();
+            pairs_mut[1][0] = 30.0;
+            pairs_mut[1][1] = 40.0;
+        }
+
+        assert_eq!(
+            packet.slice::<f32>(BufferSlot(0)).unwrap(),
+            &[1.0, 2.0, 30.0, 40.0, 5.0, 6.0]
+        );
+        assert!(packet.slice_many::<f32, 4>(BufferSlot(0)).is_err());
+    }
+
+    #[test]
+    fn packet_slice_many_mut_groups_flat_buffers() {
+        let mut packet = JobPacket::default();
+        packet
+            .ensure::<f32>(BufferSlot(0), 6)
+            .copy_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+        let pairs = packet.slice_many_mut::<f32, 2>(BufferSlot(0)).unwrap();
+        assert_eq!(pairs, &[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]);
+
+        {
+            let pairs_mut = packet.slice_many_mut::<f32, 2>(BufferSlot(0)).unwrap();
+            pairs_mut[1][0] = 30.0;
+            pairs_mut[1][1] = 40.0;
+        }
+
+        assert_eq!(
+            packet.slice::<f32>(BufferSlot(0)).unwrap(),
+            &[1.0, 2.0, 30.0, 40.0, 5.0, 6.0]
+        );
+        assert!(packet.slice_many_mut::<f32, 4>(BufferSlot(0)).is_err());
+    }
+
+    #[test]
+    fn packet_slice_errors_for_missing_or_wrong_typed_slots() {
+        let packet = JobPacket::default();
+        assert!(matches!(
+            packet.slice::<u32>(BufferSlot(77)),
+            Err(BraidError::MissingBuffer(_))
+        ));
+
+        let mut packet = JobPacket::default();
+        packet.ensure::<u32>(BufferSlot(1), 4);
+        assert!(matches!(
+            packet.slice::<u64>(BufferSlot(1)),
+            Err(BraidError::InvalidBufferType { .. })
+        ));
+    }
+
+    #[test]
+    fn packet_slice_many_rejects_bad_chunk_sizes() {
+        let mut packet = JobPacket::default();
+        packet.ensure::<u32>(BufferSlot(1), 3);
+        assert!(matches!(
+            packet.slice_many::<u32, 0>(BufferSlot(1)),
+            Err(BraidError::InvalidSpec(_))
+        ));
+        assert!(matches!(
+            packet.slice_many::<u32, 2>(BufferSlot(1)),
+            Err(BraidError::InvalidSpec(_))
+        ));
+
+        let mut packet = JobPacket::default();
+        packet.ensure::<f32>(BufferSlot(2), 4);
+        assert!(matches!(
+            packet.slice_many_mut::<f32, 0>(BufferSlot(2)),
+            Err(BraidError::InvalidSpec(_))
+        ));
+        assert!(packet.slice_many_mut::<f32, 2>(BufferSlot(2)).is_ok());
+    }
+
+    #[test]
+    fn with_slices_rejects_missing_or_duplicate_or_wrongly_typed_slots() {
+        let mut packet = JobPacket::default();
+        packet.ensure::<f32>(BufferSlot(1), 2);
+        packet.ensure::<f32>(BufferSlot(2), 2);
+        packet.ensure::<u32>(BufferSlot(3), 2);
+
+        assert!(packet
+            .with_slices::<f32, 3, _>([BufferSlot(1), BufferSlot(2), BufferSlot(9)], |_slots| {
+                Ok(())
+            })
+            .is_err());
+        assert!(packet
+            .with_slices::<f32, 2, _>([BufferSlot(1), BufferSlot(1)], |_slots| Ok(()))
+            .is_err());
+        assert!(packet
+            .with_slices::<u32, 2, _>([BufferSlot(1), BufferSlot(3)], |_slots| Ok(()))
+            .is_err());
+    }
+}

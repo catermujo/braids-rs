@@ -153,4 +153,70 @@ mod tests {
         assert!(second.capacity() >= capacity);
         assert!(second.is_empty());
     }
+
+    #[test]
+    fn spare_vecs_recycles_non_empty_vectors() {
+        use super::SpareVecs;
+
+        let mut spare: SpareVecs<u32> = SpareVecs::default();
+        let mut values = spare.checkout();
+        values.push(7);
+        spare.give_back(values);
+
+        let mut reused = spare.checkout();
+        assert!(reused.is_empty());
+        assert_eq!(reused.len(), 0);
+
+        reused.push(1);
+        spare.give_back(reused);
+        let reused_again = spare.checkout();
+        assert!(reused_again.is_empty());
+    }
+
+    #[test]
+    fn scratch_reset_clears_values_and_spare_vectors() {
+        use super::{ComputeScratch, PlannerScratch};
+
+        let mut planner_scratch = PlannerScratch {
+            bytes: vec![1, 2, 3],
+            u32s: vec![1, 2, 3],
+            u64s: vec![4, 5],
+            f32s: vec![6.0],
+            spare_u32s: super::SpareVecs {
+                buffers: vec![vec![10, 11]],
+            },
+            spare_u64s: super::SpareVecs {
+                buffers: vec![vec![20]],
+            },
+            spare_f32s: super::SpareVecs {
+                buffers: vec![vec![3.0]],
+            },
+        };
+        planner_scratch.reset();
+        assert!(planner_scratch.bytes.is_empty());
+        assert!(planner_scratch.u32s.is_empty());
+        assert!(planner_scratch.u64s.is_empty());
+        assert!(planner_scratch.f32s.is_empty());
+        assert!(planner_scratch.spare_u32s.checkout().is_empty());
+        assert!(planner_scratch.spare_u64s.checkout().is_empty());
+        assert!(planner_scratch.spare_f32s.checkout().is_empty());
+
+        let mut compute_scratch = ComputeScratch {
+            bytes: vec![1],
+            u32s: vec![2],
+            f32s: vec![3.0],
+            spare_u32s: super::SpareVecs {
+                buffers: vec![vec![11]],
+            },
+            spare_f32s: super::SpareVecs {
+                buffers: vec![vec![22.0]],
+            },
+        };
+        compute_scratch.reset();
+        assert!(compute_scratch.bytes.is_empty());
+        assert!(compute_scratch.u32s.is_empty());
+        assert!(compute_scratch.f32s.is_empty());
+        assert!(compute_scratch.spare_u32s.checkout().is_empty());
+        assert!(compute_scratch.spare_f32s.checkout().is_empty());
+    }
 }

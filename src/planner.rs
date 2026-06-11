@@ -111,3 +111,196 @@ pub trait PlannerBackend: Send + Sync + 'static {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PlannerBackend;
+    use crate::error::BraidError;
+    use crate::pipeline::{CompiledPlan, PipelineShape};
+    use crate::scratch::{BatchScratch, PlannerScratch};
+    use std::sync::Arc;
+
+    #[derive(Default)]
+    struct TestPlanner {
+        emit_many: bool,
+        counts: Arc<planner_counts::Counts>,
+    }
+
+    mod planner_counts {
+        use std::sync::atomic::AtomicUsize;
+
+        #[derive(Default)]
+        pub struct Counts {
+            pub encode_batch: AtomicUsize,
+            pub encode_one: AtomicUsize,
+            pub decode_batch: AtomicUsize,
+            pub decode_one: AtomicUsize,
+        }
+    }
+
+    impl PlannerBackend for TestPlanner {
+        type Spec = ();
+        type State = ();
+        type Change = ();
+        type Query = u32;
+        type Resolution = u32;
+        type PlannerMeta = ();
+
+        fn init_state(&self, _spec: &Self::Spec) -> crate::error::BraidResult<Self::State> {
+            Ok(())
+        }
+
+        fn reset_state(
+            &self,
+            _state: &mut Self::State,
+            _spec: &Self::Spec,
+        ) -> crate::error::BraidResult<()> {
+            Ok(())
+        }
+
+        fn apply(
+            &self,
+            _state: &mut Self::State,
+            _changes: &[Self::Change],
+        ) -> crate::error::BraidResult<()> {
+            Ok(())
+        }
+
+        fn updated_state(
+            &self,
+            _state: &Self::State,
+            _changes: &[Self::Change],
+        ) -> crate::error::BraidResult<Self::State> {
+            Ok(())
+        }
+
+        fn compile(
+            &self,
+            _state: &Self::State,
+            _scratch: &mut PlannerScratch,
+        ) -> crate::error::BraidResult<CompiledPlan<Self::PlannerMeta>> {
+            Ok(CompiledPlan {
+                pipeline: PipelineShape {
+                    buffers: Vec::new(),
+                    stages: Vec::new(),
+                },
+                static_buffers: Vec::new(),
+                planner_meta: (),
+            })
+        }
+
+        fn encode_batch(
+            &self,
+            _plan: &CompiledPlan<Self::PlannerMeta>,
+            _queries: &[Self::Query],
+            _packet: &mut crate::job::JobPacket,
+            _scratch: &mut BatchScratch,
+        ) -> crate::error::BraidResult<()> {
+            self.counts.encode_batch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn encode_one(
+            &self,
+            plan: &CompiledPlan<Self::PlannerMeta>,
+            query: &Self::Query,
+            packet: &mut crate::job::JobPacket,
+            scratch: &mut BatchScratch,
+        ) -> crate::error::BraidResult<()> {
+            self.counts.encode_one.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            PlannerBackend::encode_batch(self, plan, std::slice::from_ref(query), packet, scratch)
+        }
+
+        fn decode_batch(
+            &self,
+            _plan: &CompiledPlan<Self::PlannerMeta>,
+            _packet: &crate::job::JobPacket,
+        ) -> crate::error::BraidResult<Vec<Self::Resolution>> {
+            self.counts.decode_batch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if self.emit_many {
+                Ok(vec![1, 2])
+            } else {
+                Ok(vec![99])
+            }
+        }
+
+        fn decode_one(
+            &self,
+            _plan: &CompiledPlan<Self::PlannerMeta>,
+            packet: &crate::job::JobPacket,
+        ) -> crate::error::BraidResult<Self::Resolution> {
+            self.counts.decode_one.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut values = Self::decode_batch(self, _plan, packet)?;
+            match values.len() {
+                1 => Ok(values.pop().expect("single decode result")),
+                _ => Err(BraidError::from("single-query decode returned unexpected batch size")),
+            }
+        }
+    }
+
+    #[test]
+    fn default_decode_and_encode_paths_call_batch_variants() {
+        let counts = planner_counts::Counts::default();
+        let planner = TestPlanner {
+            emit_many: false,
+            counts: Arc::new(counts),
+        };
+        let plan = planner
+            .compile(&(), &mut PlannerScratch::default())
+            .expect("compile");
+        let mut packet = crate::job::JobPacket::default();
+        let mut scratch = BatchScratch::default();
+
+        planner.encode_one(&plan, &7, &mut packet, &mut scratch).expect("encode one");
+        planner
+            .decode_one(&plan, &packet)
+            .expect("decode one");
+
+        assert_eq!(
+            planner.counts.encode_batch.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            planner.counts.encode_one.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            planner.counts.decode_batch.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            planner.counts.decode_one.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn decode_one_errors_when_batch_is_not_singleton() {
+        let planner = TestPlanner {
+            emit_many: true,
+            counts: Arc::new(planner_counts::Counts::default()),
+        };
+        let plan = planner
+            .compile(&(), &mut PlannerScratch::default())
+            .expect("compile");
+
+        let err = planner
+            .decode_one(&plan, &crate::job::JobPacket::default())
+            .expect_err("expected mismatch");
+        assert!(err.to_string().contains("unexpected batch size"));
+    }
+
+    #[test]
+    fn resolve_one_direct_defaults_to_none() {
+        let planner = TestPlanner {
+            emit_many: false,
+            counts: Arc::new(planner_counts::Counts::default()),
+        };
+        let plan = planner
+            .compile(&(), &mut PlannerScratch::default())
+            .expect("compile");
+        assert!(planner
+            .resolve_one_direct(&plan, &12)
+            .is_none());
+    }
+}

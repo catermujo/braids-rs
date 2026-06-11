@@ -275,3 +275,93 @@ impl ChunkQuery {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CombineNode, CombineOp, FastNoiseKernel, GraphDimension, NodeSpec, PositionSource,
+        Sample3DNode, Warp2DNode, Warp3DNode,
+    };
+    use crate::fastnoise_lite::FastNoiseLite;
+    use std::sync::Arc;
+
+    #[test]
+    fn fastnoise_kernel_roundtrips_kind_mapping() {
+        use braid::KernelKind;
+        let pairs = [
+            (FastNoiseKernel::InitGrid2d, 0xF001),
+            (FastNoiseKernel::InitGrid3d, 0xF002),
+            (FastNoiseKernel::Warp2d, 0xF100),
+            (FastNoiseKernel::Warp3d, 0xF101),
+            (FastNoiseKernel::Sample2d, 0xF200),
+            (FastNoiseKernel::Sample3d, 0xF201),
+            (FastNoiseKernel::Combine, 0xF300),
+        ];
+        for (kind, raw) in pairs {
+            assert_eq!(kind.kind().0, raw);
+            assert_eq!(FastNoiseKernel::from_kind(KernelKind(raw)), Some(kind));
+        }
+        assert_eq!(FastNoiseKernel::from_kind(KernelKind(0xDEAD)), None);
+    }
+
+    #[test]
+    fn chunk_query_samples_matches_dimension_shape() {
+        let two_d = super::ChunkQuery::Grid2D {
+            width: 3,
+            height: 4,
+            origin: [0.0, 0.0],
+            step: [1.0, 1.0],
+        };
+        let three_d = super::ChunkQuery::Grid3D {
+            width: 2,
+            height: 3,
+            depth: 5,
+            origin: [0.0, 0.0, 0.0],
+            step: [1.0, 1.0, 1.0],
+        };
+        assert_eq!(two_d.samples().expect("2d samples"), 12);
+        assert_eq!(three_d.samples().expect("3d samples"), 30);
+    }
+
+    #[test]
+    fn node_spec_id_and_output_kind_reflect_shape() {
+        let warp_2d = NodeSpec::Warp2D(Warp2DNode {
+            id: "w2d".to_owned(),
+            source: PositionSource::Base,
+            noise: Arc::new(FastNoiseLite::with_seed(1)),
+        });
+        let sample_3d = NodeSpec::Sample3D(Sample3DNode {
+            id: "s3d".to_owned(),
+            source: PositionSource::Base,
+            noise: Arc::new(FastNoiseLite::with_seed(2)),
+        });
+        let combine = NodeSpec::Combine(CombineNode {
+            id: "blend".to_owned(),
+            inputs: vec!["w2d".to_owned(), "s3d".to_owned()],
+            op: CombineOp::Add,
+            params: Vec::new(),
+        });
+        let warp_3d = NodeSpec::Warp3D(Warp3DNode {
+            id: "w3d".to_owned(),
+            source: PositionSource::Base,
+            noise: Arc::new(FastNoiseLite::with_seed(3)),
+        });
+
+        assert_eq!(warp_2d.id(), "w2d");
+        assert_eq!(sample_3d.id(), "s3d");
+        assert_eq!(combine.id(), "blend");
+        assert_eq!(warp_3d.id(), "w3d");
+        assert!(matches!(
+            warp_2d.output_kind(GraphDimension::D2),
+            super::OutputKind::Position(GraphDimension::D2)
+        ));
+        assert!(matches!(
+            sample_3d.output_kind(GraphDimension::D3),
+            super::OutputKind::Scalar(GraphDimension::D3)
+        ));
+        assert!(matches!(
+            combine.output_kind(GraphDimension::D3),
+            super::OutputKind::Scalar(GraphDimension::D3)
+        ));
+    }
+}

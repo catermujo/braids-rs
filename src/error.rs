@@ -109,3 +109,68 @@ impl From<&str> for BraidError {
         Self::Message(value.to_owned())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::BraidError;
+    use crate::pipeline::{BufferSlot, KernelKind};
+
+    #[test]
+    fn error_display_covers_common_variants() {
+        assert_eq!(BraidError::Cancelled.to_string(), "job cancelled");
+        assert_eq!(BraidError::UnknownJob.to_string(), "unknown job");
+        assert_eq!(BraidError::ExecutorShutdown.to_string(), "executor is shut down");
+        assert_eq!(
+            BraidError::BackendRejectedKernel(KernelKind(7)).to_string(),
+            "backend rejected kernel kind 7"
+        );
+        assert_eq!(
+            BraidError::MissingBuffer(BufferSlot(4)).to_string(),
+            "missing buffer at slot 4"
+        );
+        assert_eq!(
+            BraidError::InvalidBufferType {
+                slot: BufferSlot(9),
+                expected: crate::pipeline::ElementKind::F32
+            }
+            .to_string(),
+            "invalid buffer type at slot 9 expected F32"
+        );
+        assert_eq!(
+            BraidError::DuplicateId {
+                kind: "node",
+                id: "a".to_owned()
+            }
+            .to_string(),
+            "duplicate node id 'a'"
+        );
+        assert_eq!(
+            BraidError::Poisoned("stack.state").to_string(),
+            "shared state 'stack.state' was poisoned"
+        );
+        assert_eq!(
+            BraidError::from("oops").to_string(),
+            "oops"
+        );
+    }
+
+    #[test]
+    fn from_string_and_str_construct_message_errors() {
+        assert!(matches!(
+            BraidError::from("hello".to_owned()),
+            BraidError::Message(msg) if msg == "hello"
+        ));
+        assert!(matches!(
+            BraidError::from("world"),
+            BraidError::Message(msg) if msg == "world"
+        ));
+    }
+
+    #[test]
+    fn poisoned_constructor_preserves_label() {
+        assert!(matches!(
+            BraidError::poisoned("planner.state"),
+            BraidError::Poisoned("planner.state")
+        ));
+    }
+}

@@ -119,10 +119,16 @@ impl ComputeBackend for CpuComputeBackend {
 #[cfg(test)]
 mod tests {
     use super::CpuComputeBackend;
+    use crate::BraidResult;
     use crate::compute::ComputeBackend;
-    use crate::error::BraidError;
-    use crate::pipeline::{CompiledPlan, KernelKind, KernelSpec, PipelineShape, StageSpec};
+    use crate::job::JobPacket;
+    use crate::pipeline::{
+        CompiledPlan, DispatchHint, KernelKind, KernelSpec, PipelineShape, StageSpec,
+    };
+    use crate::{BraidError, CpuKernelFactory};
     use crate::scratch::ComputeScratch;
+    use super::CpuKernel;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     #[test]
@@ -151,5 +157,114 @@ mod tests {
             err,
             BraidError::BackendRejectedKernel(kind) if kind == KernelKind(999)
         ));
+    }
+
+    #[derive(Default)]
+    struct CountingKernel {
+        called: Arc<AtomicBool>,
+    }
+
+    impl CpuKernel for CountingKernel {
+        fn run(&self, _packet: &mut JobPacket, _cancel: &crate::job::CancelFlag) -> BraidResult<()> {
+            self.called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct CountingKernelFactory {
+        called: Arc<AtomicUsize>,
+        ran: Arc<AtomicBool>,
+    }
+
+    impl CpuKernelFactory for CountingKernelFactory {
+        fn prepare(
+            &self,
+            _kernel: &KernelSpec,
+            _scratch: &mut ComputeScratch,
+        ) -> BraidResult<Box<dyn CpuKernel>> {
+            self.called.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(CountingKernel {
+                called: Arc::clone(&self.ran),
+            }))
+        }
+    }
+
+    fn plan_with_kernel(kind_id: KernelKind) -> CompiledPlan<()> {
+        CompiledPlan {
+            pipeline: PipelineShape {
+                buffers: Vec::new(),
+                stages: vec![StageSpec {
+                    kernels: vec![KernelSpec {
+                        kind_id,
+                        payload: Vec::new().into(),
+                        bindings: Vec::new(),
+                        dispatch: DispatchHint::Serial,
+                    }],
+                }],
+            },
+            static_buffers: Vec::new(),
+            planner_meta: (),
+        }
+    }
+
+    #[test]
+    fn run_stage_short_circuits_when_cancelled() {
+        let called = Arc::new(AtomicBool::new(false));
+        let called_count = Arc::new(AtomicUsize::new(0));
+        let backend = {
+            let mut backend = CpuComputeBackend::new();
+            backend.register_factory(
+                KernelKind(1),
+                Arc::new(CountingKernelFactory {
+                    called: Arc::clone(&called_count),
+                    ran: Arc::clone(&called),
+                }),
+            );
+            backend
+        };
+        let mut scratch = ComputeScratch::default();
+        let prepared = backend
+            .prepare(&plan_with_kernel(KernelKind(1)), None, &mut scratch)
+            .expect("prepare");
+        let mut packet = crate::job::JobPacket::default();
+        let cancel = crate::job::CancelFlag::default();
+        cancel.cancel();
+
+        let err = backend
+            .run_stage(&prepared, 0, &StageSpec::default(), &mut packet, &cancel)
+            .expect_err("cancelled");
+        assert!(matches!(err, BraidError::Cancelled));
+        assert_eq!(called_count.load(Ordering::SeqCst), 1);
+        assert!(!called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn run_stage_errors_on_missing_stage() {
+        let called_count = Arc::new(AtomicUsize::new(0));
+        let called = Arc::new(AtomicBool::new(false));
+        let mut backend = CpuComputeBackend::new();
+        backend.register_factory(
+            KernelKind(1),
+            Arc::new(CountingKernelFactory {
+                called: Arc::clone(&called_count),
+                ran: Arc::clone(&called),
+            }),
+        );
+        let mut scratch = ComputeScratch::default();
+        let prepared = backend
+            .prepare(
+                &plan_with_kernel(KernelKind(1)),
+                None,
+                &mut scratch,
+            )
+            .expect("prepare");
+        let mut packet = JobPacket::default();
+        let cancel = crate::job::CancelFlag::default();
+
+        let err = backend
+            .run_stage(&prepared, 99, &StageSpec::default(), &mut packet, &cancel)
+            .expect_err("missing stage");
+        assert!(err.to_string().contains("prepared stage missing"));
     }
 }

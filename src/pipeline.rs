@@ -331,3 +331,148 @@ impl<M> CompiledPlan<M> {
         Ok(specs)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BufferAccess, BufferBinding, BufferData, BufferLayout, BufferSpec, CompiledPlan, DispatchHint,
+        ElementKind, KernelKind, KernelSpec, PipelineShape, StaticBuffer, StageSpec, BufferSlot,
+    };
+    use crate::job::JobPacket;
+
+    #[test]
+    fn bufferdata_utility_methods_cover_len_and_kind() {
+        let mut u32_values = BufferData::empty(ElementKind::U32);
+        assert_eq!(u32_values.kind(), ElementKind::U32);
+        u32_values.clear();
+        let u64_values = BufferData::empty(ElementKind::U64);
+        assert_eq!(u64_values.kind(), ElementKind::U64);
+        assert_eq!(u64_values.len(), 0);
+        let f32_values = BufferData::empty(ElementKind::F32);
+        assert_eq!(f32_values.kind(), ElementKind::F32);
+    }
+
+    #[test]
+    fn compiled_plan_validate_catches_decl_errors() {
+        let mut plan = CompiledPlan {
+            pipeline: PipelineShape {
+                buffers: vec![
+                    BufferSpec {
+                        slot: BufferSlot(1),
+                        element_kind: ElementKind::U32,
+                        layout: BufferLayout::PerQueryScalar,
+                    },
+                    BufferSpec {
+                        slot: BufferSlot(1),
+                        element_kind: ElementKind::U64,
+                        layout: BufferLayout::PerQueryVector { width: 3 },
+                    },
+                ],
+                stages: Vec::new(),
+            },
+            static_buffers: Vec::new(),
+            planner_meta: (),
+        };
+        assert!(plan.validate().is_err());
+
+        plan.pipeline.buffers.pop();
+        plan.static_buffers.push(StaticBuffer {
+            slot: BufferSlot(9),
+            data: BufferData::empty(ElementKind::U32),
+        });
+        assert!(plan.validate().is_err());
+
+        plan.static_buffers[0].data = BufferData::empty(ElementKind::U64);
+        assert!(plan.validate().is_err());
+        plan.static_buffers[0].slot = BufferSlot(1);
+        assert!(plan.validate().is_err());
+
+        let wrong = CompiledPlan {
+            pipeline: PipelineShape {
+                buffers: vec![BufferSpec {
+                    slot: BufferSlot(2),
+                    element_kind: ElementKind::U32,
+                    layout: BufferLayout::PerQueryScalar,
+                }],
+                stages: vec![StageSpec {
+                    kernels: vec![KernelSpec {
+                        kind_id: KernelKind(1),
+                        payload: Vec::<u8>::new().into(),
+                        bindings: vec![BufferBinding {
+                            slot: BufferSlot(4),
+                            access: BufferAccess::Read,
+                        }],
+                        dispatch: DispatchHint::Serial,
+                    }],
+                }],
+            },
+            static_buffers: Vec::new(),
+            planner_meta: (),
+        };
+        assert!(wrong.validate().is_err());
+    }
+
+    #[test]
+    fn compiled_plan_validate_packet_checks_sizes_and_types() {
+        let plan = CompiledPlan {
+            pipeline: PipelineShape {
+                buffers: vec![
+                    BufferSpec {
+                        slot: BufferSlot(1),
+                        element_kind: ElementKind::U32,
+                        layout: BufferLayout::PerQueryVector { width: 2 },
+                    },
+                    BufferSpec {
+                        slot: BufferSlot(2),
+                        element_kind: ElementKind::F32,
+                        layout: BufferLayout::PerQueryScalar,
+                    },
+                ],
+                stages: Vec::new(),
+            },
+            static_buffers: Vec::new(),
+            planner_meta: (),
+        };
+
+        let mut packet = JobPacket::default();
+        packet.ensure::<u32>(BufferSlot(3), 0);
+        packet.ensure::<u64>(BufferSlot(2), 1);
+        assert!(
+            plan.validate_packet(&packet).is_err(),
+            "wrong packet element kind should fail"
+        );
+
+        let mut packet = JobPacket::default();
+        packet.ensure::<u32>(BufferSlot(1), 5);
+        packet.query_count = 3;
+        assert!(
+            plan.validate_packet(&packet).is_err(),
+            "vector buffer should reject non-multiple lengths"
+        );
+        packet.ensure::<u32>(BufferSlot(1), 6);
+        packet.query_count = 3;
+        packet.ensure::<f32>(BufferSlot(2), 1);
+        assert!(
+            plan.validate_packet(&packet).is_err(),
+            "wrong kind in second slot should fail"
+        );
+
+        let mut packet = JobPacket::default();
+        packet.ensure::<u32>(BufferSlot(1), 4);
+        packet.ensure::<f32>(BufferSlot(2), 1);
+        packet.query_count = 2;
+        assert!(plan.validate_packet(&packet).is_err());
+
+        packet.ensure::<u64>(BufferSlot(3), 0);
+        assert!(
+            plan.validate_packet(&packet).is_err(),
+            "undeclared slot with len > 0 should fail"
+        );
+
+        let mut packet = JobPacket::default();
+        packet.ensure::<u32>(BufferSlot(1), 4);
+        packet.ensure::<f32>(BufferSlot(2), 2);
+        packet.query_count = 2;
+        assert!(plan.validate_packet(&packet).is_ok());
+    }
+}

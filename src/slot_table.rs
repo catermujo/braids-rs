@@ -171,4 +171,44 @@ mod tests {
         assert_eq!(table.get(third), Some(&30));
         assert_eq!(table.get(first), None);
     }
+
+    #[test]
+    fn clear_reuse_marks_unused_slots_and_allows_reinsertion() {
+        let mut table = SlotTable::default();
+        let first = table.insert(1);
+        let second = table.insert(2);
+        assert_eq!(table.remove(first), Some(1));
+        assert!(table.get(first).is_none());
+
+        table.clear_reuse();
+        assert_eq!(table.len(), 0);
+
+        let next = table.insert(3);
+        assert_eq!(table.len(), 1);
+        assert_ne!(next.generation, second.generation);
+        assert!(table.get_mut(next).is_some());
+    }
+
+    #[test]
+    fn iteration_visitor_visits_all_live_values_once() {
+        let mut table = SlotTable::default();
+        let first = table.insert(10);
+        let second = table.insert(20);
+        let _third = table.insert(30);
+        assert_eq!(table.remove(second), Some(20));
+
+        let mut seen = 0;
+        for (_, value) in table.iter() {
+            seen += value;
+        }
+        assert_eq!(seen, 40);
+
+        let mut seen_mut = 0;
+        for (_, value) in table.iter_mut() {
+            *value += 5;
+            seen_mut += *value;
+        }
+        assert_eq!(seen_mut, 50);
+        assert_eq!(table.get(first), Some(&15));
+    }
 }
