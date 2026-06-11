@@ -592,7 +592,7 @@ fn stack_update_swaps_versions_without_clobbering_old_jobs() {
 
     let old_job = stack.dispatch(vec![10]).unwrap();
     let old_version = stack.current_version_id().unwrap();
-    let new_version = stack.update(vec![ToyChange::SetBonus(100)]).unwrap();
+    let new_version = stack.update(&[ToyChange::SetBonus(100)]).unwrap();
     assert!(new_version > old_version);
     let new_job = stack.dispatch(vec![10]).unwrap();
 
@@ -618,7 +618,7 @@ fn failed_update_rolls_back_state() {
 
     let version_before = stack.current_version_id().unwrap();
     let error = stack
-        .update(vec![ToyChange::SetBonus(u32::MAX)])
+        .update(&[ToyChange::SetBonus(u32::MAX)])
         .unwrap_err();
     assert!(error.to_string().contains("u32::MAX"));
     assert_eq!(stack.current_version_id().unwrap(), version_before);
@@ -654,7 +654,7 @@ fn resolve_inline_matches_async_and_uses_latest_version() {
     let job = stack.dispatch(vec![1, 2]).unwrap();
     assert_eq!(stack.collect(job).unwrap(), vec![4, 5]);
 
-    stack.update(vec![ToyChange::SetBonus(9)]).unwrap();
+    stack.update(&[ToyChange::SetBonus(9)]).unwrap();
     assert_eq!(stack.resolve_one_inline_with(1, &mut inline).unwrap(), 10);
 }
 

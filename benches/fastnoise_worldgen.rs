@@ -787,7 +787,7 @@ fn bench_terrain_update_braid_serial(config: &BenchConfig) -> BraidResult<BenchR
             scenarios::terrain_patch_from_biome(&summary)
         };
         checksum = checksum.wrapping_add(patch.len() as u64);
-        let version = stack.update(patch)?;
+        let version = stack.update(&patch)?;
         black_box(version);
         summary = warm_one(&stack, terrain_query(iteration as u32 + 19))?;
         checksum = checksum.wrapping_add(summary_digest(&summary));
@@ -879,9 +879,9 @@ fn bench_dependency_chain_braid_serial(config: &BenchConfig) -> BraidResult<Benc
     for iteration in 0..config.iterations {
         let frame_start = Instant::now();
         let biome_summary = warm_one(&biome, biome_query(iteration as u32))?;
-        terrain.update(scenarios::terrain_patch_from_biome(&biome_summary))?;
+        terrain.update(&scenarios::terrain_patch_from_biome(&biome_summary))?;
         let terrain_summary = warm_one(&terrain, terrain_query(iteration as u32))?;
-        voxel.update(scenarios::voxel_patch_from_terrain(&terrain_summary))?;
+        voxel.update(&scenarios::voxel_patch_from_terrain(&terrain_summary))?;
         let voxel_summary = warm_one(&voxel, voxel_query(iteration as u32))?;
         checksum = checksum
             .wrapping_add(summary_digest(&biome_summary))

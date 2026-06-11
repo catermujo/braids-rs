@@ -72,7 +72,7 @@ fn update_remove_and_set_final_field_recompile() {
     let mut updated = sample_noise(23, NoiseType::OpenSimplex2, 0.03);
     updated.set_fractal_gain(Some(0.7));
     stack
-        .update(vec![
+        .update(&[
             FastNoiseChange::UpsertNode(NodeSpec::Sample2D(Sample2DNode {
                 id: "right".to_owned(),
                 source: PositionSource::Base,
@@ -87,7 +87,7 @@ fn update_remove_and_set_final_field_recompile() {
     assert_ne!(left.checksum, right.checksum);
 
     stack
-        .update(vec![FastNoiseChange::RemoveNode {
+        .update(&[FastNoiseChange::RemoveNode {
             id: "left".to_owned(),
         }])
         .expect("remove unused node");
@@ -447,11 +447,11 @@ fn dependency_chain_updates_downstream_without_cross_stack_corruption() {
 
     let biome_summary = run_one(&biome, biome_query.clone()).expect("biome summary");
     terrain
-        .update(scenarios::terrain_patch_from_biome(&biome_summary))
+        .update(&scenarios::terrain_patch_from_biome(&biome_summary))
         .expect("terrain patch");
     let terrain_summary = run_one(&terrain, terrain_query.clone()).expect("terrain summary");
     voxel
-        .update(scenarios::voxel_patch_from_terrain(&terrain_summary))
+        .update(&scenarios::voxel_patch_from_terrain(&terrain_summary))
         .expect("voxel patch");
     let voxel_summary = run_one(&voxel, voxel_query).expect("voxel summary");
 

@@ -199,7 +199,7 @@ fn bench_stack_apis(c: &mut Criterion) {
         b.iter_batched(
             || make_queries(0x1, batch_size),
             |queries| {
-                let values = stack.dispatch_collect(queries).expect("dispatch_collect");
+                let values = stack.dispatch_collect(&queries).expect("dispatch_collect");
                 black_box(values[0]);
             },
             BatchSize::SmallInput,
@@ -210,7 +210,7 @@ fn bench_stack_apis(c: &mut Criterion) {
         let stack = make_stack().expect("stack setup");
 
         b.iter(|| {
-            let version: VersionId = stack.update(vec![0x9]).expect("update");
+            let version: VersionId = stack.update(&[0x9]).expect("update");
             black_box(version);
         });
     });

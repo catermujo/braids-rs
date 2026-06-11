@@ -1478,7 +1478,7 @@ fn bench_update_between_runs(config: &BenchConfig) -> BraidResult<BenchReport> {
     let mut checksum = 0u64;
     for iter in 0..config.iterations {
         let lane_index = iter % config.lane_count;
-        let version = stack.update(vec![
+        let version = stack.update(&[
             BenchChange::SetBias(mix32(iter as u32).wrapping_add(17)),
             BenchChange::SetMultiplier(mix32((iter as u32) ^ 0xA55A_A55A) | 1),
             BenchChange::PatchLane {
@@ -1574,7 +1574,7 @@ fn bench_version_swap_inflight(config: &BenchConfig) -> BraidResult<BenchReport>
         let new_queries = old_queries.clone();
         let old_job = stack.dispatch(old_queries)?;
 
-        let version = stack.update(vec![
+        let version = stack.update(&[
             BenchChange::SetBias(mix32((iter as u32).wrapping_add(101))),
             BenchChange::PatchLane {
                 index: iter % config.lane_count,
@@ -1743,7 +1743,7 @@ fn run_parallel_updates(
                 let mut updates = 0usize;
                 for iteration in 0..iterations {
                     for (local_index, stack) in owned_stacks.iter().enumerate() {
-                        let version = stack.update(make_update_changes(
+                        let version = stack.update(&make_update_changes(
                             iteration + local_index,
                             worker_index,
                             config.lane_count,
@@ -1789,7 +1789,7 @@ fn run_mixed_update_runtime(
                 barrier.wait();
                 for iteration in 0..iterations {
                     for (local_index, stack) in owned_stacks.iter().enumerate() {
-                        stack.update(make_update_changes(
+                        stack.update(&make_update_changes(
                             iteration + local_index,
                             worker_index,
                             config.lane_count,
@@ -1869,7 +1869,7 @@ fn warm_update_between_runs(
     stack: &Stack<BenchPlanner, BenchBackend>,
     config: &BenchConfig,
 ) -> BraidResult<()> {
-    black_box(stack.update(vec![
+    black_box(stack.update(&[
         BenchChange::SetBias(7),
         BenchChange::SetMultiplier(9),
         BenchChange::PatchLane {
@@ -1901,7 +1901,7 @@ fn warm_version_swap_inflight(
     inflight_batch_size: usize,
 ) -> BraidResult<()> {
     let old_job = stack.dispatch(make_queries(21, inflight_batch_size))?;
-    black_box(stack.update(vec![
+    black_box(stack.update(&[
         BenchChange::SetBias(23),
         BenchChange::PatchLane {
             index: 1 % config.lane_count,

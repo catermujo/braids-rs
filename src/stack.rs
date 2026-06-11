@@ -173,7 +173,7 @@ where
     }
 
     /// Apply changes to the live mutable planner state without recompiling.
-    pub fn apply(&self, changes: Vec<P::Change>) -> BraidResult<()> {
+    pub fn apply(&self, changes: &[P::Change]) -> BraidResult<()> {
         let mut state = self
             .inner
             .state
@@ -206,7 +206,7 @@ where
     ///
     /// This is the safest high-level update path when planner changes should behave
     /// transactionally.
-    pub fn update(&self, changes: Vec<P::Change>) -> BraidResult<VersionId> {
+    pub fn update(&self, changes: &[P::Change]) -> BraidResult<VersionId> {
         let mut state = self
             .inner
             .state
@@ -510,7 +510,7 @@ where
     ///
     /// This avoids job allocation, queueing, and collect synchronization for benchmarks
     /// and caller-owned workloads that do not need async behavior.
-    pub fn dispatch_collect(&self, queries: Vec<P::Query>) -> BraidResult<Vec<P::Resolution>> {
+    pub fn dispatch_collect(&self, queries: &[P::Query]) -> BraidResult<Vec<P::Resolution>> {
         let version = {
             let version = self
                 .inner
@@ -526,7 +526,7 @@ where
             .checkout("stack.inline_context")?;
         context.cancel.reset();
         let result = if P::PREFER_DIRECT_ONE_QUERY_INLINE
-            && let [query] = queries.as_slice()
+            && let [query] = queries
         {
             #[cfg(debug_assertions)]
             {
@@ -548,7 +548,7 @@ where
                     .map(|value| vec![value])
             }
         } else if P::PREFER_ONE_QUERY_INLINE
-            && let [query] = queries.as_slice()
+            && let [query] = queries
         {
             #[cfg(debug_assertions)]
             {
@@ -569,7 +569,7 @@ where
             }
         } else {
             self.inner
-                .execute_inline(&version, queries.as_slice(), &mut context)
+                .execute_inline(&version, queries, &mut context)
         };
         context.reset();
         self.inner
