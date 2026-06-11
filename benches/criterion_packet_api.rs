@@ -1,10 +1,8 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use braid::{
-    BatchScratch, BufferSlot, ComputeScratch, JobPacket, PlannerScratch,
-};
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use braid::{BatchScratch, BufferSlot, ComputeScratch, JobPacket, PlannerScratch};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 fn fill_u32_slot(packet: &mut JobPacket, slot: BufferSlot, count: usize) {
     packet.query_count = count;
@@ -64,46 +62,60 @@ fn bench_job_packet(c: &mut Criterion) {
         );
     });
 
-    group.bench_with_input(BenchmarkId::new("slice_many_4", 1024), &1024usize, |b, &count| {
-        b.iter_batched(
-            || make_packet((count / 4) * 4),
-            |packet| {
-                let chunked = packet.slice_many::<u32, 4>(BufferSlot(0)).unwrap();
-                black_box(chunked.len())
-            },
-            BatchSize::SmallInput,
-        );
-    });
+    group.bench_with_input(
+        BenchmarkId::new("slice_many_4", 1024),
+        &1024usize,
+        |b, &count| {
+            b.iter_batched(
+                || make_packet((count / 4) * 4),
+                |packet| {
+                    let chunked = packet.slice_many::<u32, 4>(BufferSlot(0)).unwrap();
+                    black_box(chunked.len())
+                },
+                BatchSize::SmallInput,
+            );
+        },
+    );
 
-    group.bench_with_input(BenchmarkId::new("packet_clear_for_reuse", 1024), &1024usize, |b, &count| {
-        let mut packet = make_packet(count);
+    group.bench_with_input(
+        BenchmarkId::new("packet_clear_for_reuse", 1024),
+        &1024usize,
+        |b, &count| {
+            let mut packet = make_packet(count);
 
-        b.iter(|| {
-            packet.clear_for_reuse();
-            black_box(packet.query_count);
-        });
-    });
+            b.iter(|| {
+                packet.clear_for_reuse();
+                black_box(packet.query_count);
+            });
+        },
+    );
 
-    group.bench_with_input(BenchmarkId::new("packet_recycle_and_clear", 1024), &1024usize, |b, &size| {
-        let (mut planner_scratch, mut batch_scratch, mut compute_scratch) = make_scratch_state(size);
-        let mut packet = make_packet(size);
+    group.bench_with_input(
+        BenchmarkId::new("packet_recycle_and_clear", 1024),
+        &1024usize,
+        |b, &size| {
+            let (mut planner_scratch, mut batch_scratch, mut compute_scratch) =
+                make_scratch_state(size);
+            let mut packet = make_packet(size);
 
-        b.iter(|| {
-            planner_scratch.reset();
-            batch_scratch.reset();
-            compute_scratch.reset();
-            packet.clear_for_reuse();
-            black_box((
-                planner_scratch.bytes.len(),
-                batch_scratch.u32s.len(),
-                compute_scratch.u32s.len(),
-                packet.query_count,
-            ));
-        });
-    });
+            b.iter(|| {
+                planner_scratch.reset();
+                batch_scratch.reset();
+                compute_scratch.reset();
+                packet.clear_for_reuse();
+                black_box((
+                    planner_scratch.bytes.len(),
+                    batch_scratch.u32s.len(),
+                    compute_scratch.u32s.len(),
+                    packet.query_count,
+                ));
+            });
+        },
+    );
 
     group.bench_function("packet_recycle_and_clear_4k", |b| {
-        let (mut planner_scratch, mut batch_scratch, mut compute_scratch) = make_scratch_state(4096);
+        let (mut planner_scratch, mut batch_scratch, mut compute_scratch) =
+            make_scratch_state(4096);
         let mut packet = make_packet(4096);
 
         b.iter(|| {

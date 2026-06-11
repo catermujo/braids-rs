@@ -75,11 +75,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[derive(Clone)]
 struct TerrainRecipe {
-    warp: FastNoiseLite,
-    continent: FastNoiseLite,
-    erosion: FastNoiseLite,
-    peaks: FastNoiseLite,
-    detail: FastNoiseLite,
+    warp: Arc<FastNoiseLite>,
+    continent: Arc<FastNoiseLite>,
+    erosion: Arc<FastNoiseLite>,
+    peaks: Arc<FastNoiseLite>,
+    detail: Arc<FastNoiseLite>,
 }
 
 fn terrain_recipe() -> TerrainRecipe {
@@ -93,7 +93,7 @@ fn terrain_recipe() -> TerrainRecipe {
     }
 }
 
-fn find_warp2d_noise(spec: &FastNoiseGraphSpec, id: &str) -> FastNoiseLite {
+fn find_warp2d_noise(spec: &FastNoiseGraphSpec, id: &str) -> Arc<FastNoiseLite> {
     spec.nodes
         .iter()
         .find_map(|node| match node {
@@ -103,7 +103,7 @@ fn find_warp2d_noise(spec: &FastNoiseGraphSpec, id: &str) -> FastNoiseLite {
         .unwrap_or_else(|| panic!("warp2d node missing: {id}"))
 }
 
-fn find_sample2d_noise(spec: &FastNoiseGraphSpec, id: &str) -> FastNoiseLite {
+fn find_sample2d_noise(spec: &FastNoiseGraphSpec, id: &str) -> Arc<FastNoiseLite> {
     spec.nodes
         .iter()
         .find_map(|node| match node {

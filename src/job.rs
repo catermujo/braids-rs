@@ -2,8 +2,8 @@
 
 use crate::error::{BraidError, BraidResult};
 use crate::pipeline::{BufferData, BufferSlot, ElementKind};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Typed element access contract for [`JobPacket`] buffers.
 pub trait PacketElement: Default + Sized {

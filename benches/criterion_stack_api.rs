@@ -3,12 +3,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use braid::{
-    BraidError, BraidResult, BackendConfig, BraidExecutor, BufferAccess, BufferBinding, BufferLayout,
-    BufferSlot, BufferSpec, CancelFlag, CompiledPlan, ComputeBackend, ComputeScratch, DispatchHint,
-    ElementKind, KernelKind, KernelSpec, JobPacket, PlannerBackend, PlannerScratch, PipelineShape,
-    Stack, StageSpec, VersionId,
+    BackendConfig, BraidError, BraidExecutor, BraidResult, BufferAccess, BufferBinding,
+    BufferLayout, BufferSlot, BufferSpec, CancelFlag, CompiledPlan, ComputeBackend, ComputeScratch,
+    DispatchHint, ElementKind, JobPacket, KernelKind, KernelSpec, PipelineShape, PlannerBackend,
+    PlannerScratch, Stack, StageSpec, VersionId,
 };
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 
 const DATA_SLOT: BufferSlot = BufferSlot(0);
 const WORKER_KIND: KernelKind = KernelKind(0xC0FF_00D0);
@@ -52,7 +52,11 @@ impl PlannerBackend for BenchPlanner {
         Ok(())
     }
 
-    fn updated_state(&self, state: &Self::State, changes: &[Self::Change]) -> BraidResult<Self::State> {
+    fn updated_state(
+        &self,
+        state: &Self::State,
+        changes: &[Self::Change],
+    ) -> BraidResult<Self::State> {
         let mut next = *state;
         if let Some(seed) = changes.first() {
             next.seed = *seed;
@@ -154,13 +158,9 @@ fn make_queries(seed: u32, batch_size: usize) -> Vec<u32> {
 fn make_stack() -> BraidResult<Stack<BenchPlanner, BenchBackend>> {
     let executor = Arc::new(BraidExecutor::new(2));
     let planner = Arc::new(BenchPlanner);
-    let backend = executor.register_backend(Arc::new(BenchBackend), BackendConfig { lane_count: 1 });
-    Stack::create(
-        executor,
-        planner,
-        backend,
-        BenchSpec { seed: 0xBEEF },
-    )
+    let backend =
+        executor.register_backend(Arc::new(BenchBackend), BackendConfig { lane_count: 1 });
+    Stack::create(executor, planner, backend, BenchSpec { seed: 0xBEEF })
 }
 
 fn bench_stack_apis(c: &mut Criterion) {

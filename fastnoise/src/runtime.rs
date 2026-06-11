@@ -177,9 +177,7 @@ impl PlannerBackend for FastNoisePlanner {
         };
         let float_values = {
             let float_values = packet.ensure::<f32>(SLOT_QUERY_F32, query_count * 6);
-            unsafe {
-                std::slice::from_raw_parts_mut(float_values.as_mut_ptr(), float_values.len())
-            };
+            unsafe { std::slice::from_raw_parts_mut(float_values.as_mut_ptr(), float_values.len()) }
         };
         let offset_values = {
             let offset_values = packet.ensure::<u32>(SLOT_QUERY_OFFSETS, query_count + 1);

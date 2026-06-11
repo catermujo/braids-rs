@@ -8,7 +8,7 @@ use crate::planner::PlannerBackend;
 use crate::scratch::{BatchScratch, ComputeScratch, PlannerScratch};
 use crate::version::FrozenStackVersion;
 use std::collections::HashMap;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
@@ -293,49 +293,51 @@ where
         };
         context.cancel.reset();
         if P::PREFER_DIRECT_ONE_QUERY_INLINE
-            && let [query] = queries {
-                #[cfg(debug_assertions)]
-                {
-                    let result = catch_unwind(AssertUnwindSafe(|| {
-                        self.inner
-                            .execute_one_direct_inline(&version, query, context)
-                    }));
-                    return match result {
-                        Ok(result) => result.map(|value| vec![value]),
-                        Err(_) => Err(BraidError::from("inline execution panicked")),
-                    };
-                }
-
-                #[cfg(not(debug_assertions))]
-                {
-                    return self
-                        .inner
+            && let [query] = queries
+        {
+            #[cfg(debug_assertions)]
+            {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    self.inner
                         .execute_one_direct_inline(&version, query, context)
-                        .map(|value| vec![value]);
-                }
+                }));
+                return match result {
+                    Ok(result) => result.map(|value| vec![value]),
+                    Err(_) => Err(BraidError::from("inline execution panicked")),
+                };
             }
+
+            #[cfg(not(debug_assertions))]
+            {
+                return self
+                    .inner
+                    .execute_one_direct_inline(&version, query, context)
+                    .map(|value| vec![value]);
+            }
+        }
 
         if P::PREFER_ONE_QUERY_INLINE
-            && let [query] = queries {
-                #[cfg(debug_assertions)]
-                {
-                    let result = catch_unwind(AssertUnwindSafe(|| {
-                        self.inner.execute_one_inline(&version, query, context)
-                    }));
-                    return match result {
-                        Ok(result) => result.map(|value| vec![value]),
-                        Err(_) => Err(BraidError::from("inline execution panicked")),
-                    };
-                }
-
-                #[cfg(not(debug_assertions))]
-                {
-                    return self
-                        .inner
-                        .execute_one_inline(&version, query, context)
-                        .map(|value| vec![value]);
-                }
+            && let [query] = queries
+        {
+            #[cfg(debug_assertions)]
+            {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    self.inner.execute_one_inline(&version, query, context)
+                }));
+                return match result {
+                    Ok(result) => result.map(|value| vec![value]),
+                    Err(_) => Err(BraidError::from("inline execution panicked")),
+                };
             }
+
+            #[cfg(not(debug_assertions))]
+            {
+                return self
+                    .inner
+                    .execute_one_inline(&version, query, context)
+                    .map(|value| vec![value]);
+            }
+        }
 
         #[cfg(debug_assertions)]
         {
@@ -545,7 +547,9 @@ where
                     .execute_one_direct_inline(&version, query, &mut context)
                     .map(|value| vec![value])
             }
-        } else if P::PREFER_ONE_QUERY_INLINE && let [query] = queries.as_slice() {
+        } else if P::PREFER_ONE_QUERY_INLINE
+            && let [query] = queries.as_slice()
+        {
             #[cfg(debug_assertions)]
             {
                 let result = catch_unwind(AssertUnwindSafe(|| {
@@ -564,7 +568,8 @@ where
                     .map(|value| vec![value])
             }
         } else {
-            self.inner.execute_inline(&version, queries.as_slice(), &mut context)
+            self.inner
+                .execute_inline(&version, queries.as_slice(), &mut context)
         };
         context.reset();
         self.inner

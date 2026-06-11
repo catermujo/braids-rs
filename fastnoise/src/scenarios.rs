@@ -36,12 +36,24 @@ pub fn biome_control_2d() -> FastNoiseGraphSpec {
             NodeSpec::Sample2D(Sample2DNode {
                 id: BIOME_MOISTURE_NODE.to_owned(),
                 source: PositionSource::Node(BIOME_WARP_NODE.to_owned()),
-                noise: Arc::new(sample_noise(711, NoiseType::Perlin, FractalType::FBm, 0.0022, 4)),
+                noise: Arc::new(sample_noise(
+                    711,
+                    NoiseType::Perlin,
+                    FractalType::FBm,
+                    0.0022,
+                    4,
+                )),
             }),
             NodeSpec::Sample2D(Sample2DNode {
                 id: BIOME_TEMPERATURE_NODE.to_owned(),
                 source: PositionSource::Node(BIOME_WARP_NODE.to_owned()),
-                noise: Arc::new(sample_noise(719, NoiseType::OpenSimplex2, FractalType::FBm, 0.0018, 4)),
+                noise: Arc::new(sample_noise(
+                    719,
+                    NoiseType::OpenSimplex2,
+                    FractalType::FBm,
+                    0.0018,
+                    4,
+                )),
             }),
             NodeSpec::Combine(CombineNode {
                 id: BIOME_FINAL_NODE.to_owned(),
@@ -69,12 +81,24 @@ pub fn terrain_height_2d() -> FastNoiseGraphSpec {
             NodeSpec::Sample2D(Sample2DNode {
                 id: TERRAIN_CONTINENT_NODE.to_owned(),
                 source: PositionSource::Node(TERRAIN_WARP_NODE.to_owned()),
-                noise: Arc::new(sample_noise(1011, NoiseType::OpenSimplex2, FractalType::FBm, 0.0012, 5)),
+                noise: Arc::new(sample_noise(
+                    1011,
+                    NoiseType::OpenSimplex2,
+                    FractalType::FBm,
+                    0.0012,
+                    5,
+                )),
             }),
             NodeSpec::Sample2D(Sample2DNode {
                 id: TERRAIN_EROSION_NODE.to_owned(),
                 source: PositionSource::Node(TERRAIN_WARP_NODE.to_owned()),
-                noise: Arc::new(sample_noise(1019, NoiseType::Perlin, FractalType::FBm, 0.0032, 4)),
+                noise: Arc::new(sample_noise(
+                    1019,
+                    NoiseType::Perlin,
+                    FractalType::FBm,
+                    0.0032,
+                    4,
+                )),
             }),
             NodeSpec::Sample2D(Sample2DNode {
                 id: TERRAIN_PEAKS_NODE.to_owned(),
@@ -130,12 +154,24 @@ pub fn voxel_density_3d() -> FastNoiseGraphSpec {
             NodeSpec::Sample3D(Sample3DNode {
                 id: VOXEL_BASE_NODE.to_owned(),
                 source: PositionSource::Base,
-                noise: Arc::new(sample_noise(2011, NoiseType::OpenSimplex2, FractalType::FBm, 0.018, 5)),
+                noise: Arc::new(sample_noise(
+                    2011,
+                    NoiseType::OpenSimplex2,
+                    FractalType::FBm,
+                    0.018,
+                    5,
+                )),
             }),
             NodeSpec::Sample3D(Sample3DNode {
                 id: VOXEL_CAVE_NODE.to_owned(),
                 source: PositionSource::Node(VOXEL_WARP_NODE.to_owned()),
-                noise: Arc::new(sample_noise(2019, NoiseType::Cellular, FractalType::Ridged, 0.03, 3)),
+                noise: Arc::new(sample_noise(
+                    2019,
+                    NoiseType::Cellular,
+                    FractalType::Ridged,
+                    0.03,
+                    3,
+                )),
             }),
             NodeSpec::Combine(CombineNode {
                 id: VOXEL_SHAPE_NODE.to_owned(),

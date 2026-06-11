@@ -8,8 +8,8 @@ use crate::pipeline::{
 use crate::planner::PlannerBackend;
 use crate::scratch::{BatchScratch, ComputeScratch, PlannerScratch};
 use crate::{BackendConfig, BraidError, BraidExecutor, InlineContext, Stack};
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -775,7 +775,6 @@ fn packet_slice_many_groups_flat_buffers() {
     );
     assert!(packet.slice_many::<f32, 4>(TOY_INPUT_SLOT).is_err());
 }
-
 
 #[test]
 fn packet_slice_many_mut_groups_flat_buffers() {
