@@ -1,8 +1,11 @@
 [package]
 name = "braids"
+description = "ProcGen-oriented parallelism & acceleration framework"
 version = "0.1.0"
 edition = "2024"
 readme = "README.md"
+repository = "https://github.com/catermujo/braids-rs"
+license-file = "LICENSE.md"
 
 [workspace]
 members = [".", "fastnoise"]

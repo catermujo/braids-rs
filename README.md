@@ -9,11 +9,11 @@ There are three big abstractions that make this all possible:
   backends.
 
 We also provide a fastnoise-lite impl that you can use to play around.
-Using braids with 8 lanes and 8 workers you can get around `9.83x` speed-up compared to just using fastnoise-lite.
+Using braids with 8 lanes and 8 workers you can get around `7.63x` speed-up compared to just using fastnoise-lite.
 
 > [!NOTE]
-> Measured on an M4 Pro, use `cargo run -p braids --example lanes_showcase --release` to see how far you can get
-> on your machine.
+> Use `cargo bench --bench fastnoise_worldgen` for fair same-stack numbers on your machine.
+> Use `cargo run -p braids --example lanes_showcase --release` for the direct FastNoise showcase.
 
 ## Quickstart
 
