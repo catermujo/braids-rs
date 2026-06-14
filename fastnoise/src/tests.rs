@@ -6,7 +6,7 @@ use crate::model::{
 };
 use crate::runtime::{KernelPayload, SamplePayload, make_cpu_backend, summarize_samples};
 use crate::{FastNoiseCpuBackend, scenarios};
-use braid::{BackendConfig, BraidExecutor, BufferSlot, PlannerBackend, Stack};
+use braids::{BackendConfig, BraidExecutor, BufferSlot, PlannerBackend, Stack};
 use std::sync::Arc;
 
 fn sample_noise(seed: i32, noise_type: NoiseType, frequency: f32) -> FastNoiseLite {
@@ -24,7 +24,7 @@ fn sample_noise_node(seed: i32, noise_type: NoiseType, frequency: f32) -> Arc<Fa
 
 fn make_stack(
     spec: FastNoiseGraphSpec,
-) -> braid::BraidResult<Stack<FastNoisePlanner, FastNoiseCpuBackend>> {
+) -> braids::BraidResult<Stack<FastNoisePlanner, FastNoiseCpuBackend>> {
     let executor = Arc::new(BraidExecutor::new(4));
     let backend = executor.register_backend(
         Arc::new(make_cpu_backend()),
@@ -36,7 +36,7 @@ fn make_stack(
 fn run_one(
     stack: &Stack<FastNoisePlanner, FastNoiseCpuBackend>,
     query: ChunkQuery,
-) -> braid::BraidResult<crate::ChunkSummary> {
+) -> braids::BraidResult<crate::ChunkSummary> {
     let job = stack.dispatch(vec![query])?;
     let mut values = stack.collect(job)?;
     Ok(values.remove(0))
@@ -110,9 +110,9 @@ fn packet_sizing_and_offsets_follow_query_shapes() {
     };
     let state = planner.init_state(&spec).expect("state");
     let plan = planner
-        .compile(&state, &mut braid::PlannerScratch::default())
+        .compile(&state, &mut braids::PlannerScratch::default())
         .expect("plan");
-    let mut packet = braid::JobPacket::default();
+    let mut packet = braids::JobPacket::default();
     planner
         .encode_batch(
             &plan,
@@ -131,7 +131,7 @@ fn packet_sizing_and_offsets_follow_query_shapes() {
                 },
             ],
             &mut packet,
-            &mut braid::BatchScratch::default(),
+            &mut braids::BatchScratch::default(),
         )
         .expect("encode");
 
@@ -165,7 +165,7 @@ fn sample3d_payload_roundtrip_preserves_fields() {
         noise: noise.clone(),
     };
 
-    let mut scratch = braid::PlannerScratch::default();
+    let mut scratch = braids::PlannerScratch::default();
     let kernel = payload.encode(&mut scratch).expect("encode");
     let decoded =
         SamplePayload::<3>::decode(FastNoiseKernel::Sample3d, &kernel.payload).expect("decode");

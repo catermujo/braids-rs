@@ -4,7 +4,7 @@ use crate::pipeline::{BufferSlot, ElementKind, KernelKind};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-/// Standard result alias used by `braid`.
+/// Standard result alias used by `braids`.
 pub type BraidResult<T> = Result<T, BraidError>;
 
 #[derive(Clone, Debug)]
@@ -119,7 +119,10 @@ mod tests {
     fn error_display_covers_common_variants() {
         assert_eq!(BraidError::Cancelled.to_string(), "job cancelled");
         assert_eq!(BraidError::UnknownJob.to_string(), "unknown job");
-        assert_eq!(BraidError::ExecutorShutdown.to_string(), "executor is shut down");
+        assert_eq!(
+            BraidError::ExecutorShutdown.to_string(),
+            "executor is shut down"
+        );
         assert_eq!(
             BraidError::BackendRejectedKernel(KernelKind(7)).to_string(),
             "backend rejected kernel kind 7"
@@ -148,10 +151,7 @@ mod tests {
             BraidError::Poisoned("stack.state").to_string(),
             "shared state 'stack.state' was poisoned"
         );
-        assert_eq!(
-            BraidError::from("oops").to_string(),
-            "oops"
-        );
+        assert_eq!(BraidError::from("oops").to_string(), "oops");
     }
 
     #[test]

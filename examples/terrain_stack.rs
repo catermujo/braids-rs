@@ -1,7 +1,7 @@
-//! Smallest real `braid` stack example using the FastNoise adapter.
+//! Smallest real `braids` stack example using the FastNoise adapter.
 
-use braid::{BackendConfig, BraidExecutor, Stack};
-use braid_fastnoise::{ChunkQuery, FastNoisePlanner, make_cpu_backend, scenarios};
+use braids::{BackendConfig, BraidExecutor, Stack};
+use braids_fastnoise::{ChunkQuery, FastNoisePlanner, make_cpu_backend, scenarios};
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

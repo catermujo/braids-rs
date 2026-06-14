@@ -196,7 +196,9 @@ mod tests {
             _packet: &mut crate::job::JobPacket,
             _scratch: &mut BatchScratch,
         ) -> crate::error::BraidResult<()> {
-            self.counts.encode_batch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.counts
+                .encode_batch
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(())
         }
 
@@ -207,7 +209,9 @@ mod tests {
             packet: &mut crate::job::JobPacket,
             scratch: &mut BatchScratch,
         ) -> crate::error::BraidResult<()> {
-            self.counts.encode_one.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.counts
+                .encode_one
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             PlannerBackend::encode_batch(self, plan, std::slice::from_ref(query), packet, scratch)
         }
 
@@ -216,7 +220,9 @@ mod tests {
             _plan: &CompiledPlan<Self::PlannerMeta>,
             _packet: &crate::job::JobPacket,
         ) -> crate::error::BraidResult<Vec<Self::Resolution>> {
-            self.counts.decode_batch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.counts
+                .decode_batch
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if self.emit_many {
                 Ok(vec![1, 2])
             } else {
@@ -229,11 +235,15 @@ mod tests {
             _plan: &CompiledPlan<Self::PlannerMeta>,
             packet: &crate::job::JobPacket,
         ) -> crate::error::BraidResult<Self::Resolution> {
-            self.counts.decode_one.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.counts
+                .decode_one
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut values = Self::decode_batch(self, _plan, packet)?;
             match values.len() {
                 1 => Ok(values.pop().expect("single decode result")),
-                _ => Err(BraidError::from("single-query decode returned unexpected batch size")),
+                _ => Err(BraidError::from(
+                    "single-query decode returned unexpected batch size",
+                )),
             }
         }
     }
@@ -251,25 +261,37 @@ mod tests {
         let mut packet = crate::job::JobPacket::default();
         let mut scratch = BatchScratch::default();
 
-        planner.encode_one(&plan, &7, &mut packet, &mut scratch).expect("encode one");
         planner
-            .decode_one(&plan, &packet)
-            .expect("decode one");
+            .encode_one(&plan, &7, &mut packet, &mut scratch)
+            .expect("encode one");
+        planner.decode_one(&plan, &packet).expect("decode one");
 
         assert_eq!(
-            planner.counts.encode_batch.load(std::sync::atomic::Ordering::Relaxed),
+            planner
+                .counts
+                .encode_batch
+                .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
         assert_eq!(
-            planner.counts.encode_one.load(std::sync::atomic::Ordering::Relaxed),
+            planner
+                .counts
+                .encode_one
+                .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
         assert_eq!(
-            planner.counts.decode_batch.load(std::sync::atomic::Ordering::Relaxed),
+            planner
+                .counts
+                .decode_batch
+                .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
         assert_eq!(
-            planner.counts.decode_one.load(std::sync::atomic::Ordering::Relaxed),
+            planner
+                .counts
+                .decode_one
+                .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
     }
@@ -299,8 +321,6 @@ mod tests {
         let plan = planner
             .compile(&(), &mut PlannerScratch::default())
             .expect("compile");
-        assert!(planner
-            .resolve_one_direct(&plan, &12)
-            .is_none());
+        assert!(planner.resolve_one_direct(&plan, &12).is_none());
     }
 }

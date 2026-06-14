@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use braid::{BatchScratch, BufferSlot, ComputeScratch, JobPacket, PlannerScratch};
+use braids::{BatchScratch, BufferSlot, ComputeScratch, JobPacket, PlannerScratch};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 fn fill_u32_slot(packet: &mut JobPacket, slot: BufferSlot, count: usize) {

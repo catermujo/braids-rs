@@ -2,7 +2,7 @@
 
 ## Deferred
 
-- Optional `braid::dag` / `braid::resolve` helper for named dependency resolution.
+- Optional `braids::dag` / `braids::resolve` helper for named dependency resolution.
   Scope: stable handle interning, duplicate ID detection, missing reference detection, topo sort, cycle detection, reachable-from-root traversal.
   Non-goals: owning domain node semantics, output typing, dimension checks, slot allocation, payload encoding, or full graph compilation.
   Why: `fastnoise` currently hand-rolls generic DAG compile work, while real-world procgen targets stay mostly flat and should not be forced into a graph-first core API.

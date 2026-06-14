@@ -8,7 +8,7 @@ use crate::model::{
     NodeSpec, OutputKind, PositionSlots, PositionSource, SLOT_BASE_X, SLOT_BASE_Y, SLOT_BASE_Z,
     SLOT_DYNAMIC_START, SLOT_QUERY_F32, SLOT_QUERY_META, SLOT_QUERY_OFFSETS,
 };
-use braid::{
+use braids::{
     BatchScratch, BraidError, BraidResult, BufferBinding, BufferSlot, BufferSpec, CancelFlag,
     CompiledPlan, ComputeScratch, CpuComputeBackend, CpuKernel, CpuKernelFactory, ElementKind,
     JobPacket, KernelSpec, PlannerBackend, PlannerScratch, SlotTable, StageSpec,
@@ -99,7 +99,7 @@ pub(crate) trait KernelPayload: Sized {
             kind_id: self.kind().kind(),
             payload: payload.into(),
             bindings: Vec::new(),
-            dispatch: braid::DispatchHint::WholeBatch,
+            dispatch: braids::DispatchHint::WholeBatch,
         })
     }
 
@@ -822,34 +822,34 @@ fn compile_graph(
         BufferSpec {
             slot: SLOT_QUERY_META,
             element_kind: ElementKind::U32,
-            layout: braid::BufferLayout::Dynamic,
+            layout: braids::BufferLayout::Dynamic,
         },
         BufferSpec {
             slot: SLOT_QUERY_F32,
             element_kind: ElementKind::F32,
-            layout: braid::BufferLayout::Dynamic,
+            layout: braids::BufferLayout::Dynamic,
         },
         BufferSpec {
             slot: SLOT_QUERY_OFFSETS,
             element_kind: ElementKind::U32,
-            layout: braid::BufferLayout::Dynamic,
+            layout: braids::BufferLayout::Dynamic,
         },
         BufferSpec {
             slot: SLOT_BASE_X,
             element_kind: ElementKind::F32,
-            layout: braid::BufferLayout::Dynamic,
+            layout: braids::BufferLayout::Dynamic,
         },
         BufferSpec {
             slot: SLOT_BASE_Y,
             element_kind: ElementKind::F32,
-            layout: braid::BufferLayout::Dynamic,
+            layout: braids::BufferLayout::Dynamic,
         },
     ];
     if state.dimension == GraphDimension::D3 {
         buffers.push(BufferSpec {
             slot: SLOT_BASE_Z,
             element_kind: ElementKind::F32,
-            layout: braid::BufferLayout::Dynamic,
+            layout: braids::BufferLayout::Dynamic,
         });
     }
 
@@ -888,18 +888,18 @@ fn compile_graph(
             bindings: vec![
                 BufferBinding {
                     slot: SLOT_QUERY_META,
-                    access: braid::BufferAccess::Read,
+                    access: braids::BufferAccess::Read,
                 },
                 BufferBinding {
                     slot: SLOT_QUERY_F32,
-                    access: braid::BufferAccess::Read,
+                    access: braids::BufferAccess::Read,
                 },
                 BufferBinding {
                     slot: SLOT_QUERY_OFFSETS,
-                    access: braid::BufferAccess::Read,
+                    access: braids::BufferAccess::Read,
                 },
             ],
-            dispatch: braid::DispatchHint::WholeBatch,
+            dispatch: braids::DispatchHint::WholeBatch,
         }],
     });
 
@@ -971,7 +971,7 @@ fn compile_graph(
     }
 
     Ok(CompiledPlan {
-        pipeline: braid::PipelineShape { buffers, stages },
+        pipeline: braids::PipelineShape { buffers, stages },
         static_buffers: Vec::new(),
         planner_meta: FastNoisePlannerMeta {
             dimension: state.dimension,
@@ -1057,7 +1057,7 @@ fn dynamic_f32_buffer(slot: BufferSlot) -> BufferSpec {
     BufferSpec {
         slot,
         element_kind: ElementKind::F32,
-        layout: braid::BufferLayout::Dynamic,
+        layout: braids::BufferLayout::Dynamic,
     }
 }
 

@@ -1,4 +1,4 @@
-# `braid` - parallel ProcGen made "easy"
+# `braids` - parallel ProcGen made "easy"
 
 There are three big abstractions that make this all possible:
 
@@ -9,10 +9,10 @@ There are three big abstractions that make this all possible:
   backends.
 
 We also provide a fastnoise-lite impl that you can use to play around.
-Using braid with 8 lanes and 8 workers you can get around `9.83x` speed-up compared to just using fastnoise-lite.
+Using braids with 8 lanes and 8 workers you can get around `9.83x` speed-up compared to just using fastnoise-lite.
 
 > [!NOTE]
-> Measured on an M4 Pro, use `cargo run -p braid --example lanes_showcase --release` to see how far you can get
+> Measured on an M4 Pro, use `cargo run -p braids --example lanes_showcase --release` to see how far you can get
 > on your machine.
 
 ## Quickstart
@@ -47,7 +47,7 @@ for query in &queries {
 > let summary = stack.resolve_one_inline(query)?;
 > let summaries = stack.resolve_inline(&queries)?;
 >
-> let mut inline = braid::InlineContext::default();
+> let mut inline = braids::InlineContext::default();
 > let summary = stack.resolve_one_inline_with(query, &mut inline)?;
 > ```
 
@@ -58,7 +58,7 @@ If you want deeper lifecycle details, see [docs/architecture.md](./docs/architec
 - [docs/architecture.md](./docs/architecture.md): core concepts, job flow, versioning, and memory model
 - [docs/writing_planners_and_backends.md](./docs/writing_planners_and_backends.md): how to implement a planner or backend
 - [examples/terrain_stack.rs](./examples/terrain_stack.rs): smallest real stack example
-- [examples/lanes_showcase.rs](./examples/lanes_showcase.rs): direct serial vs braid parallel showcase
+- [examples/lanes_showcase.rs](./examples/lanes_showcase.rs): direct serial vs braids parallel showcase
 
 ## FAQ
 

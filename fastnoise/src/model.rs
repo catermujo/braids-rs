@@ -1,5 +1,5 @@
 use crate::fastnoise_lite::FastNoiseLite;
-use braid::{BraidResult, BufferSlot, CpuComputeBackend, KernelKind, SlotKey, SlotTable};
+use braids::{BraidResult, BufferSlot, CpuComputeBackend, KernelKind, SlotKey, SlotTable};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn fastnoise_kernel_roundtrips_kind_mapping() {
-        use braid::KernelKind;
+        use braids::KernelKind;
         let pairs = [
             (FastNoiseKernel::InitGrid2d, 0xF001),
             (FastNoiseKernel::InitGrid3d, 0xF002),

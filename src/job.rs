@@ -404,16 +404,22 @@ mod tests {
         packet.ensure::<f32>(BufferSlot(2), 2);
         packet.ensure::<u32>(BufferSlot(3), 2);
 
-        assert!(packet
-            .with_slices::<f32, 3, _>([BufferSlot(1), BufferSlot(2), BufferSlot(9)], |_slots| {
-                Ok(())
-            })
-            .is_err());
-        assert!(packet
-            .with_slices::<f32, 2, _>([BufferSlot(1), BufferSlot(1)], |_slots| Ok(()))
-            .is_err());
-        assert!(packet
-            .with_slices::<u32, 2, _>([BufferSlot(1), BufferSlot(3)], |_slots| Ok(()))
-            .is_err());
+        assert!(
+            packet
+                .with_slices::<f32, 3, _>([BufferSlot(1), BufferSlot(2), BufferSlot(9)], |_slots| {
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert!(
+            packet
+                .with_slices::<f32, 2, _>([BufferSlot(1), BufferSlot(1)], |_slots| Ok(()))
+                .is_err()
+        );
+        assert!(
+            packet
+                .with_slices::<u32, 2, _>([BufferSlot(1), BufferSlot(3)], |_slots| Ok(()))
+                .is_err()
+        );
     }
 }

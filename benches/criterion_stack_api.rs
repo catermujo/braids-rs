@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
-use braid::{
+use braids::{
     BackendConfig, BraidError, BraidExecutor, BraidResult, BufferAccess, BufferBinding,
     BufferLayout, BufferSlot, BufferSpec, CancelFlag, CompiledPlan, ComputeBackend, ComputeScratch,
     DispatchHint, ElementKind, JobPacket, KernelKind, KernelSpec, PipelineShape, PlannerBackend,
@@ -102,7 +102,7 @@ impl PlannerBackend for BenchPlanner {
         _plan: &CompiledPlan<Self::PlannerMeta>,
         queries: &[Self::Query],
         packet: &mut JobPacket,
-        _scratch: &mut braid::BatchScratch,
+        _scratch: &mut braids::BatchScratch,
     ) -> BraidResult<()> {
         packet.query_count = queries.len();
         packet
