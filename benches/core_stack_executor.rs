@@ -1,6 +1,6 @@
 //! Core stack/executor benchmark suite.
 
-use braid::{
+use braids::{
     BackendConfig, BatchScratch, BraidError, BraidExecutor, BraidResult, BufferBinding, BufferSlot,
     BufferSpec, CancelFlag, CompiledPlan, ComputeBackend, ComputeScratch, ElementKind,
     InlineContext, JobPacket, KernelKind, KernelSpec, PlannerBackend, PlannerScratch, Stack,
@@ -299,11 +299,11 @@ impl PlannerBackend for BenchPlanner {
         let finish_payload = encode_finish_payload(state, scratch);
 
         let plan = CompiledPlan {
-            pipeline: braid::PipelineShape {
+            pipeline: braids::PipelineShape {
                 buffers: vec![BufferSpec {
                     slot: DATA_SLOT,
                     element_kind: ElementKind::U32,
-                    layout: braid::BufferLayout::PerQueryScalar,
+                    layout: braids::BufferLayout::PerQueryScalar,
                 }],
                 stages: vec![
                     StageSpec {
@@ -312,9 +312,9 @@ impl PlannerBackend for BenchPlanner {
                             payload: scan_payload,
                             bindings: vec![BufferBinding {
                                 slot: DATA_SLOT,
-                                access: braid::BufferAccess::ReadWrite,
+                                access: braids::BufferAccess::ReadWrite,
                             }],
-                            dispatch: braid::DispatchHint::WholeBatch,
+                            dispatch: braids::DispatchHint::WholeBatch,
                         }],
                     },
                     StageSpec {
@@ -323,9 +323,9 @@ impl PlannerBackend for BenchPlanner {
                             payload: finish_payload,
                             bindings: vec![BufferBinding {
                                 slot: DATA_SLOT,
-                                access: braid::BufferAccess::ReadWrite,
+                                access: braids::BufferAccess::ReadWrite,
                             }],
-                            dispatch: braid::DispatchHint::WholeBatch,
+                            dispatch: braids::DispatchHint::WholeBatch,
                         }],
                     },
                 ],
@@ -1644,7 +1644,7 @@ fn bench_create_stack_and_run(config: &BenchConfig) -> BraidResult<BenchReport> 
 fn make_stack_group(
     executor: &Arc<BraidExecutor>,
     planner: &Arc<BenchPlanner>,
-    backend: &braid::BackendHandle<BenchBackend>,
+    backend: &braids::BackendHandle<BenchBackend>,
     config: &BenchConfig,
     count: usize,
 ) -> BraidResult<Vec<Stack<BenchPlanner, BenchBackend>>> {
@@ -1658,7 +1658,7 @@ fn make_stack_group(
 fn make_stack(
     executor: &Arc<BraidExecutor>,
     planner: &Arc<BenchPlanner>,
-    backend: &braid::BackendHandle<BenchBackend>,
+    backend: &braids::BackendHandle<BenchBackend>,
     config: &BenchConfig,
     seed: usize,
 ) -> BraidResult<Stack<BenchPlanner, BenchBackend>> {
@@ -1917,7 +1917,7 @@ fn warm_version_swap_inflight(
 fn warm_create_stack_and_run(
     executor: &Arc<BraidExecutor>,
     planner: &Arc<BenchPlanner>,
-    backend: &braid::BackendHandle<BenchBackend>,
+    backend: &braids::BackendHandle<BenchBackend>,
     config: &BenchConfig,
 ) -> BraidResult<()> {
     let stack = make_stack(executor, planner, backend, config, 31)?;

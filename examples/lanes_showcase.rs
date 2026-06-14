@@ -1,7 +1,7 @@
 //! Direct-serial vs braid-parallel showcase for terrain chunk generation.
 
-use braid::{BackendConfig, BraidExecutor, Stack};
-use braid_fastnoise::{
+use braids::{BackendConfig, BraidExecutor, Stack};
+use braids_fastnoise::{
     ChunkQuery, ChunkSummary, FastNoiseGraphSpec, FastNoiseLite, FastNoisePlanner, NodeSpec,
     make_cpu_backend, scenarios,
 };

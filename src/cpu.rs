@@ -119,17 +119,17 @@ impl ComputeBackend for CpuComputeBackend {
 #[cfg(test)]
 mod tests {
     use super::CpuComputeBackend;
+    use super::CpuKernel;
     use crate::BraidResult;
     use crate::compute::ComputeBackend;
     use crate::job::JobPacket;
     use crate::pipeline::{
         CompiledPlan, DispatchHint, KernelKind, KernelSpec, PipelineShape, StageSpec,
     };
-    use crate::{BraidError, CpuKernelFactory};
     use crate::scratch::ComputeScratch;
-    use super::CpuKernel;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use crate::{BraidError, CpuKernelFactory};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[test]
     fn rejects_unknown_kernel_kind() {
@@ -165,7 +165,11 @@ mod tests {
     }
 
     impl CpuKernel for CountingKernel {
-        fn run(&self, _packet: &mut JobPacket, _cancel: &crate::job::CancelFlag) -> BraidResult<()> {
+        fn run(
+            &self,
+            _packet: &mut JobPacket,
+            _cancel: &crate::job::CancelFlag,
+        ) -> BraidResult<()> {
             self.called.store(true, Ordering::SeqCst);
             Ok(())
         }
@@ -253,11 +257,7 @@ mod tests {
         );
         let mut scratch = ComputeScratch::default();
         let prepared = backend
-            .prepare(
-                &plan_with_kernel(KernelKind(1)),
-                None,
-                &mut scratch,
-            )
+            .prepare(&plan_with_kernel(KernelKind(1)), None, &mut scratch)
             .expect("prepare");
         let mut packet = JobPacket::default();
         let cancel = crate::job::CancelFlag::default();

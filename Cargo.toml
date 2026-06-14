@@ -1,5 +1,5 @@
 [package]
-name = "braid"
+name = "braids"
 version = "0.1.0"
 edition = "2024"
 readme = "README.md"
@@ -30,7 +30,7 @@ name = "criterion_stack_api"
 harness = false
 
 [dev-dependencies]
-braid-fastnoise = { path = "fastnoise" }
+braids-fastnoise = { path = "fastnoise" }
 criterion = "0.8"
 
 [workspace.lints.rust]

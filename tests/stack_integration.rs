@@ -3,32 +3,11 @@ use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use braid::{
-    BraidError,
-    BraidExecutor,
-    BraidResult,
-    BackendConfig,
-    BatchScratch,
-    BufferAccess,
-    BufferBinding,
-    BufferLayout,
-    BufferSlot,
-    BufferSpec,
-    CancelFlag,
-    CompiledPlan,
-    ComputeScratch,
-    DispatchHint,
-    ElementKind,
-    InlineContext,
-    JobPacket,
-    JobStatus,
-    KernelKind,
-    KernelSpec,
-    PlannerBackend,
-    PipelineShape,
-    PlannerScratch,
-    StageSpec,
-    Stack,
+use braids::{
+    BackendConfig, BatchScratch, BraidError, BraidExecutor, BraidResult, BufferAccess,
+    BufferBinding, BufferLayout, BufferSlot, BufferSpec, CancelFlag, CompiledPlan, ComputeScratch,
+    DispatchHint, ElementKind, InlineContext, JobPacket, JobStatus, KernelKind, KernelSpec,
+    PipelineShape, PlannerBackend, PlannerScratch, Stack, StageSpec,
 };
 
 const TOY_INPUT_SLOT: BufferSlot = BufferSlot(0);
@@ -120,9 +99,7 @@ impl PlannerBackend for ToyPlanner {
         scratch
             .bytes
             .extend_from_slice(&state.delay_ms.to_le_bytes());
-        scratch
-            .bytes
-            .extend_from_slice(&state.bonus.to_le_bytes());
+        scratch.bytes.extend_from_slice(&state.bonus.to_le_bytes());
         let plan = CompiledPlan {
             pipeline: PipelineShape {
                 buffers: vec![
@@ -353,7 +330,7 @@ impl PlannerBackend for CountingPlanner {
     }
 }
 
-impl braid::ComputeBackend for ToyBackend {
+impl braids::ComputeBackend for ToyBackend {
     type Prepared = ToyPrepared;
 
     fn prepare<M: Send + Sync + 'static>(
@@ -380,7 +357,7 @@ impl braid::ComputeBackend for ToyBackend {
     }
 }
 
-impl braid::ComputeBackend for CountingBackend {
+impl braids::ComputeBackend for CountingBackend {
     type Prepared = ToyPrepared;
 
     fn prepare<M: Send + Sync + 'static>(
@@ -513,7 +490,7 @@ impl PlannerBackend for DirectPlanner {
     }
 }
 
-impl braid::ComputeBackend for DirectBackend {
+impl braids::ComputeBackend for DirectBackend {
     type Prepared = ();
 
     fn prepare<M: Send + Sync + 'static>(
@@ -622,9 +599,7 @@ fn failed_update_rolls_back_state() {
     .unwrap();
 
     let version_before = stack.current_version_id().unwrap();
-    let error = stack
-        .update(&[ToyChange::SetBonus(u32::MAX)])
-        .unwrap_err();
+    let error = stack.update(&[ToyChange::SetBonus(u32::MAX)]).unwrap_err();
     assert!(error.to_string().contains("u32::MAX"));
     assert_eq!(stack.current_version_id().unwrap(), version_before);
 

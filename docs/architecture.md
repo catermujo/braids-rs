@@ -1,10 +1,10 @@
-# Braid Architecture
+# Braids Architecture
 
-This file explains the runtime shape of `braid` without planner-specific words.
+This file explains the runtime shape of `braids` without planner-specific words.
 
 ## Goals
 
-`braid` tries to do four things:
+`braids` tries to do four things:
 
 - keep planner logic separate from execution logic
 - keep compute backend logic separate from executor logic
@@ -141,7 +141,7 @@ This is why planner state is separate from frozen compiled versions.
 
 ## Memory Model
 
-`braid` tries to reuse memory instead of freeing everything immediately.
+`braids` tries to reuse memory instead of freeing everything immediately.
 
 Things that stay live:
 
@@ -163,7 +163,7 @@ Things that may stay at high-water mark:
 - pooled `JobPacket`s and scratch buffers
 - pooled backend prepared state
 
-This is deliberate. `braid` prefers reuse and low churn over aggressive shrinking.
+This is deliberate. `braids` prefers reuse and low churn over aggressive shrinking.
 
 ## Concurrency Model
 
@@ -183,7 +183,7 @@ There is also separate prepare-lane control for recompile/prepare pressure.
 
 ## What Braid Does Not Do
 
-`braid` core does not:
+`braids` core does not:
 
 - define your planner schema
 - force use of `CpuComputeBackend`

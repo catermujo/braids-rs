@@ -568,8 +568,7 @@ where
                     .map(|value| vec![value])
             }
         } else {
-            self.inner
-                .execute_inline(&version, queries, &mut context)
+            self.inner.execute_inline(&version, queries, &mut context)
         };
         context.reset();
         self.inner

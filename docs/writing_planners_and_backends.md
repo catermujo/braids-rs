@@ -1,8 +1,8 @@
 # Writing Planners And Backends
 
-This guide shows the smallest useful shape for extending `braid`.
+This guide shows the smallest useful shape for extending `braids`.
 
-`braid` has two extension seams:
+`braids` has two extension seams:
 
 - `PlannerBackend`: owns domain data, compile, encode, decode
 - `ComputeBackend`: owns prepared execution state and stage execution
@@ -28,7 +28,7 @@ Backend answers:
 ## Minimal Planner Skeleton
 
 ```rust
-use braid::{
+use braids::{
     BatchScratch, BraidResult, CompiledPlan, JobPacket, PlannerBackend, PlannerScratch,
 };
 
@@ -105,7 +105,7 @@ impl PlannerBackend for MyPlanner {
 ## Minimal Backend Skeleton
 
 ```rust
-use braid::{
+use braids::{
     BraidResult, CancelFlag, CompiledPlan, ComputeBackend, ComputeScratch, JobPacket, StageSpec,
 };
 
@@ -223,7 +223,7 @@ Good planner/backend behavior:
 - reuse scratch buffers
 - reuse prepared backend state when possible
 
-`braid` is biased toward low churn, not toward aggressive shrinking after peaks.
+`braids` is biased toward low churn, not toward aggressive shrinking after peaks.
 
 ## Smallest Real Example
 

@@ -335,8 +335,9 @@ impl<M> CompiledPlan<M> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BufferAccess, BufferBinding, BufferData, BufferLayout, BufferSpec, CompiledPlan, DispatchHint,
-        ElementKind, KernelKind, KernelSpec, PipelineShape, StaticBuffer, StageSpec, BufferSlot,
+        BufferAccess, BufferBinding, BufferData, BufferLayout, BufferSlot, BufferSpec,
+        CompiledPlan, DispatchHint, ElementKind, KernelKind, KernelSpec, PipelineShape, StageSpec,
+        StaticBuffer,
     };
     use crate::job::JobPacket;
 

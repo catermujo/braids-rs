@@ -1,11 +1,11 @@
 //! Real FastNoise worldgen benchmark suite for serial-overhead and gameplay-feel measurements.
 
-use braid::{
+use braids::{
     BackendConfig, BackendHandle, BatchScratch, BraidExecutor, BraidResult, BufferSlot, CancelFlag,
     CompiledPlan, ComputeBackend, ComputeScratch, JobPacket, PipelineShape, PlannerBackend,
     PlannerScratch, Stack,
 };
-use braid_fastnoise::{
+use braids_fastnoise::{
     ChunkQuery, ChunkSummary, FastNoiseChange, FastNoiseCpuBackend, FastNoiseGraphSpec,
     FastNoiseLite, FastNoisePlanner, NodeSpec, make_cpu_backend, scenarios,
 };
@@ -1461,7 +1461,7 @@ impl ComputeBackend for NullBackend {
         &self,
         _prepared: &Self::Prepared,
         _stage_index: usize,
-        _stage: &braid::StageSpec,
+        _stage: &braids::StageSpec,
         _packet: &mut JobPacket,
         _cancel: &CancelFlag,
     ) -> BraidResult<()> {

@@ -60,11 +60,7 @@ mod tests {
             Ok(())
         }
 
-        fn reset_state(
-            &self,
-            _state: &mut Self::State,
-            _spec: &Self::Spec,
-        ) -> BraidResult<()> {
+        fn reset_state(&self, _state: &mut Self::State, _spec: &Self::Spec) -> BraidResult<()> {
             Ok(())
         }
 

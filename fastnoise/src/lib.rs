@@ -1,5 +1,5 @@
 #![allow(missing_docs)]
-//! FastNoise-based worldgen adapter for `braid`.
+//! FastNoise-based worldgen adapter for `braids`.
 #![doc = include_str!("../README.md")]
 
 #[allow(missing_docs)]
