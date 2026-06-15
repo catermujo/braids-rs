@@ -1,8 +1,10 @@
 [package]
 name = "braids-fastnoise"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/catermujo/braids-rs"
+description = "`fastnoise-lite` `Planner` impl for braids"
 
 [lib]
 path = "src/lib.rs"
@@ -14,5 +16,5 @@ std = ["fastnoise-lite/std"]
 libm = ["fastnoise-lite/libm"]
 
 [dependencies]
-braids = { path = ".." }
+braids = { path = "..", version = "0.2.0" }
 fastnoise-lite = { version = "1.1.1", default-features = false }
