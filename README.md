@@ -14,15 +14,15 @@ We also provide a fastnoise-lite impl that you can use to play around.
 Using braids with 8 lanes and 8 workers you can get around `7.63x` speed-up compared to just using fastnoise-lite.
 
 > [!NOTE]
-> Use `cargo bench --bench fastnoise_worldgen` for fair same-stack numbers on your machine.
-> Use `cargo run -p braids --example lanes_showcase --release` for the direct FastNoise showcase.
+> Use `cargo bench -p braids-fastnoise --bench fastnoise_worldgen` for fair same-stack numbers on your machine.
+> Use `cargo run -p braids-fastnoise --example lanes_showcase --release` for the direct FastNoise showcase.
 
 ## Quickstart
 
 First you need to implement the planner trait for your pcg backend, I know this can be a hefty task but you only gotta do it once
 right?
 
-Then you can set up a basic executor as follows (taken from [examples/lanes_showcase.rs](./examples/lanes_showcase.rs)).
+Then you can set up a basic executor as follows (taken from [fastnoise/examples/lanes_showcase.rs](./fastnoise/examples/lanes_showcase.rs)).
 
 ```rust
 let executor = Arc::new(BraidExecutor::new(lanes));
@@ -59,8 +59,8 @@ If you want deeper lifecycle details, see [docs/architecture.md](./docs/architec
 
 - [docs/architecture.md](./docs/architecture.md): core concepts, job flow, versioning, and memory model
 - [docs/writing_planners_and_backends.md](./docs/writing_planners_and_backends.md): how to implement a planner or backend
-- [examples/terrain_stack.rs](./examples/terrain_stack.rs): smallest real stack example
-- [examples/lanes_showcase.rs](./examples/lanes_showcase.rs): direct serial vs braids parallel showcase
+- [fastnoise/examples/terrain_stack.rs](./fastnoise/examples/terrain_stack.rs): smallest real stack example
+- [fastnoise/examples/lanes_showcase.rs](./fastnoise/examples/lanes_showcase.rs): direct serial vs braids parallel showcase
 
 ## FAQ
 

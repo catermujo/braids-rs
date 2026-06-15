@@ -20,11 +20,6 @@ path = "src/lib.rs"
 # harness = false
 
 [[bench]]
-name = "fastnoise_worldgen"
-path = "benches/fastnoise_worldgen.rs"
-harness = false
-
-[[bench]]
 name = "criterion_packet_api"
 harness = false
 
@@ -33,8 +28,7 @@ name = "criterion_stack_api"
 harness = false
 
 [dev-dependencies]
-braids-fastnoise = { path = "fastnoise" }
-criterion = "0.8"
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
 [workspace.lints.rust]
 redundant_imports = "deny"

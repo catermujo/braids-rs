@@ -229,5 +229,5 @@ Good planner/backend behavior:
 
 See:
 
-- [examples/terrain_stack.rs](../examples/terrain_stack.rs)
+- [fastnoise/examples/terrain_stack.rs](../fastnoise/examples/terrain_stack.rs)
 - [fastnoise/src/lib.rs](../fastnoise/src/lib.rs)

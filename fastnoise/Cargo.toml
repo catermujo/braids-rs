@@ -9,6 +9,11 @@ description = "`fastnoise-lite` `Planner` impl for braids"
 [lib]
 path = "src/lib.rs"
 
+[[bench]]
+name = "fastnoise_worldgen"
+path = "benches/fastnoise_worldgen.rs"
+harness = false
+
 [features]
 default = ["std"]
 f64 = ["fastnoise-lite/f64"]
@@ -18,3 +23,6 @@ libm = ["fastnoise-lite/libm"]
 [dependencies]
 braids = { path = "..", version = "0.2.0" }
 fastnoise-lite = { version = "1.1.1", default-features = false }
+
+[dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
