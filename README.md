@@ -1,3 +1,5 @@
+[![crates.io](https://img.shields.io/crates/v/braids?logo=rust&color=blue "crates.io")](https://crates.io/crates/braids) [![docs.rs](https://img.shields.io/docsrs/braids/latest?logo=docs.rs&label=docs.rs&color=blue "docs.rs")](https://docs.rs/braids/latest/braids/)
+
 # `braids` - parallel ProcGen made "easy"
 
 There are three big abstractions that make this all possible:
